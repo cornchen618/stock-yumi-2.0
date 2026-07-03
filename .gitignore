@@ -1,0 +1,22 @@
+# 資料與輸出：體積大且全部可由 scripts/ 重建
+data/
+output/
+logs/
+
+# 個人狀態與帳戶資訊（不上傳）
+holdings.csv
+settings.json
+
+# 執行日誌
+*.log
+*_log.txt
+chips_log.txt
+chips_err.txt
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 工具
+.claude/

@@ -1,0 +1,5 @@
+{
+  "portfolio": {"partial_take_r": 3.0, "chandelier_mult": 3.0},
+  "strat_a": {"ma_exit_days": 3, "atr_stop_mult": 2.0},
+  "strat_c": {"ma_exit_days": 3, "atr_stop_mult": 2.0}
+}
