@@ -39,8 +39,9 @@ def tradable_universe(min_amt: float = 15e6, min_vol: float = 300_000) -> list[s
     return sorted(g[(g.med_amt >= min_amt) & (g.med_vol >= min_vol)].index.tolist())
 
 
-def fetch_symbol(dataset: str, symbol: str, token: str | None) -> pd.DataFrame | None:
-    params = {"dataset": dataset, "data_id": symbol, "start_date": START_DATE}
+def fetch_symbol(dataset: str, symbol: str, token: str | None,
+                 start_date: str = START_DATE) -> pd.DataFrame | None:
+    params = {"dataset": dataset, "data_id": symbol, "start_date": start_date}
     if token:
         params["token"] = token
     for attempt in range(5):
@@ -68,6 +69,8 @@ def main() -> None:
     p.add_argument("--datasets", default="inst", help="逗號分隔：inst,margin")
     p.add_argument("--sleep", type=float, default=9.0)
     p.add_argument("--merge-only", action="store_true")
+    p.add_argument("--update", action="store_true",
+                   help="增量更新：已快取者只補最近 10 天並去重（每日排程用）")
     args = p.parse_args()
 
     token = os.environ.get("FINMIND_TOKEN")
@@ -80,12 +83,26 @@ def main() -> None:
         cache.mkdir(parents=True, exist_ok=True)
 
         if not args.merge_only:
-            todo = [s for s in uni if not (cache / f"{s}.parquet").exists()]
-            print(f"[{dataset}] 待抓 {len(todo)} / {len(uni)} 檔", flush=True)
+            if args.update:
+                todo = uni
+            else:
+                todo = [s for s in uni if not (cache / f"{s}.parquet").exists()]
+            print(f"[{dataset}] 待抓 {len(todo)} / {len(uni)} 檔（update={args.update}）", flush=True)
             for k, sym in enumerate(todo):
-                df = fetch_symbol(dataset, sym, token)
+                f = cache / f"{sym}.parquet"
+                start = START_DATE
+                old = None
+                if args.update and f.exists():
+                    old = pd.read_parquet(f)
+                    if len(old):
+                        start = (pd.to_datetime(old["date"]).max() - pd.Timedelta(days=10)).strftime("%Y-%m-%d")
+                df = fetch_symbol(dataset, sym, token, start_date=start)
                 if df is not None:
-                    df.to_parquet(cache / f"{sym}.parquet", index=False)
+                    if old is not None and len(old):
+                        df = pd.concat([old, df], ignore_index=True)
+                        dedup_keys = [c for c in ("date", "stock_id", "name") if c in df.columns]
+                        df = df.drop_duplicates(dedup_keys, keep="last")
+                    df.to_parquet(f, index=False)
                 if (k + 1) % 20 == 0:
                     print(f"  進度 {k + 1}/{len(todo)}", flush=True)
                 time.sleep(args.sleep + random.uniform(0, 2))
