@@ -23,9 +23,105 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from qts.data import load_names
+from qts.scanner import STRAT_ZH, TRIGGER_ZH
 
 COMM = 0.001425 * 0.6
 TAX = 0.003
+
+
+def _cls(v: float) -> str:
+    return "pos" if v >= 0 else "neg"
+
+
+def strategy_section() -> str:
+    """策略規則總覽（規格來源：MOMENTUM.md / STRATEGY.md）。"""
+    return """
+<h2>策略與買賣標準</h2>
+<div class="grid2">
+<div class="rulebox">
+ <h3>動能組合（主力・月調倉）</h3>
+ <ul>
+  <li><b>買進</b>：每月最後交易日收盤，12-1 動能（近 12 個月報酬、跳過最近 1 個月）&gt; 0 且排名前 20，次日開盤等權買進（每檔＝權益÷20）</li>
+  <li><b>續抱</b>：動能 &gt; 0 且排名 ≤ 40</li>
+  <li><b>賣出</b>：跌出前 40 名 或 動能轉負 → 月底次日開盤市價賣出</li>
+  <li><b>資格</b>：20日中位數量 ≥ 50萬股、金額 ≥ 3000萬、價 ≥ 10元</li>
+  <li><b>風控</b>：無個股停損（換血靠月調倉紀律）；開盤漲幅 ≥ 9.5% 放棄買單</li>
+ </ul>
+</div>
+<div class="rulebox">
+ <h3>波段 A/B/C（紙上觀察・未過上線門檻）</h3>
+ <ul>
+  <li><b>A 順勢突破</b>：多頭排列＋突破20/10日高或站回月線＋1.5倍量</li>
+  <li><b>B 破底翻</b>：60日低檔跌破支撐後收復＋過昨高＋量能確認</li>
+  <li><b>C 蓄勢突破</b>：壓縮整理（帶寬百分位≤30%）＋量縮 → 帶量突破</li>
+  <li><b>停損</b>：訊號K低點與收盤−1.5ATR取低者（B=spring低點×0.99），跌破次日出場</li>
+  <li><b>停利</b>：+2R 先出一半、停損上移至成本；獲利&gt;1R 後吊燈式移動停損（最高收盤−2.5ATR）；A/C 連2日收破月線出場</li>
+  <li><b>部位</b>：單筆風險=權益1%、上限15%、大盤&lt;60日線停開新倉</li>
+ </ul>
+</div>
+</div>"""
+
+
+def momentum_snapshot(equity: float, names: dict) -> str:
+    """目前動能排名前 20（即時快照，非月底正式訊號）。"""
+    px = pd.read_parquet(ROOT / "data" / "ohlcv.parquet",
+                         columns=["date", "symbol", "close", "raw_close", "volume", "amount"])
+    px["date"] = pd.to_datetime(px["date"])
+    cp = px.pivot_table(index="date", columns="symbol", values="close")
+    vp = px.pivot_table(index="date", columns="symbol", values="volume")
+    ap = px.pivot_table(index="date", columns="symbol", values="amount")
+    rp = px.pivot_table(index="date", columns="symbol", values="raw_close")
+    asof = cp.index.max()
+    mom = (cp.shift(21) / cp.shift(252) - 1.0).iloc[-1]
+    elig = ((vp.rolling(20).median().iloc[-1] >= 5e5)
+            & (ap.rolling(20).median().iloc[-1] >= 3e7)
+            & (cp.iloc[-1] >= 10.0) & mom.notna())
+    top = mom.where(elig).dropna().sort_values(ascending=False)
+    top = top[top > 0].head(20)
+
+    held = set()
+    hp = ROOT / "holdings.csv"
+    if hp.exists():
+        held = set(pd.read_csv(hp, dtype={"symbol": str})["symbol"])
+
+    rows = []
+    for i, (s, m) in enumerate(top.items(), 1):
+        price = float(rp.iloc[-1][s])
+        shares = int(equity / 20 // price)
+        status = "持有中" if s in held else "候選"
+        rows.append(f"<tr><td>{i}</td><td>{s} {names.get(s, '')}</td>"
+                    f"<td class='pos'>{m * 100:+.0f}%</td><td>{price:g}</td>"
+                    f"<td>{shares:,}</td><td>{status}</td></tr>")
+    return f"""
+<h2>動能組合－目前排名前 20 <span class="note">（資料日 {asof:%Y-%m-%d}；即時快照，正式訊號以月底收盤為準）</span></h2>
+<table><tr><th>#</th><th>標的</th><th>12-1動能</th><th>收盤</th><th>建議股數</th><th>狀態</th></tr>
+{''.join(rows)}</table>
+<p class="note">買進標準：月底動能&gt;0且排前20｜賣出標準：跌出前40或動能轉負｜每檔目標金額＝權益÷20＝{equity / 20:,.0f} 元</p>"""
+
+
+def scan_snapshot() -> str:
+    """最新波段掃描候選（output/scan_*.csv）。"""
+    files = sorted((ROOT / "output").glob("scan_*.csv"))
+    if not files:
+        return "<h2>波段掃描－最新候選</h2><p class='note'>尚無掃描結果（17:40 盤後任務會自動產生）。</p>"
+    f = files[-1]
+    day = f.stem.split("_")[-1]
+    d = pd.read_csv(f, dtype={"symbol": str})
+    if "target_partial" not in d.columns:  # 舊版 CSV 相容
+        d["target_partial"] = (d["close"] + 2 * (d["close"] - d["init_stop"])).round(2)
+    rows = []
+    for r in d.itertuples():
+        trig = TRIGGER_ZH.get(str(r.trigger), str(r.trigger))
+        lots = int(r.suggest_shares) // 1000
+        size = f"{lots}張" if lots else "資金不足"
+        rows.append(f"<tr><td>{r.symbol} {getattr(r, 'name', '')}</td><td>{STRAT_ZH.get(r.strategy, r.strategy)}</td>"
+                    f"<td>{trig}</td><td>{r.close:g}</td><td class='neg'>{r.init_stop:g}</td>"
+                    f"<td class='pos'>{r.target_partial:g}</td><td>{size}</td></tr>")
+    return f"""
+<h2>波段掃描－最新候選 <span class="note">（資料日 {day[:4]}-{day[4:6]}-{day[6:]}；紙上觀察，未過上線門檻）</span></h2>
+<table><tr><th>標的</th><th>策略</th><th>觸發</th><th>收盤</th><th>停損</th><th>停利(+2R)</th><th>建議</th></tr>
+{''.join(rows)}</table>
+<p class="note">停損＝跌破次日開盤出場｜停利＝到價先出一半、剩餘停損上移至成本後吊燈追蹤｜建議張數以 1% 風險計算</p>"""
 
 
 def backtest_payload(src: Path) -> dict | None:
@@ -152,10 +248,17 @@ HTML = """<!DOCTYPE html>
  .note{color:#8a94a3;font-size:12px}
  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
  @media(max-width:900px){.grid2{grid-template-columns:1fr}}
+ .rulebox{background:#1b2027;border:1px solid #2a2f36;border-radius:8px;padding:4px 16px 10px}
+ .rulebox h3{font-size:14px;margin:10px 0 6px}
+ .rulebox ul{margin:0;padding-left:18px;font-size:13px;line-height:1.7}
 </style></head><body>
 <h1>TWQuant 交易金流儀表板 <span class="note">產生時間 __GEN_TIME__</span></h1>
 <div class="wrap">
 __LIVE_SECTION__
+__STRAT_SECTION__
+__MOM_SECTION__
+__SCAN_SECTION__
+<hr style="border-color:#2a2f36">
 <h2>動能組合回測（__BT_PERIOD__，含全部成本）</h2>
 <div class="cards">
  <div class="card"><div class="k">期末權益</div><div class="v">__BT_FINAL__</div></div>
@@ -261,8 +364,17 @@ def main() -> None:
         raise SystemExit(f"找不到回測輸出（{args.source}/equity.csv、trades.csv）；請先跑 scripts/run_momentum.py")
     lv = live_payload()
 
+    equity = 1_000_000.0
+    sp = ROOT / "settings.json"
+    if sp.exists():
+        equity = float(json.loads(sp.read_text(encoding="utf-8")).get("equity", equity))
+    names = load_names(ROOT / "data" / "universe.csv")
+
     html = HTML
     html = html.replace("__GEN_TIME__", f"{datetime.now():%Y-%m-%d %H:%M}")
+    html = html.replace("__STRAT_SECTION__", strategy_section())
+    html = html.replace("__MOM_SECTION__", momentum_snapshot(equity, names))
+    html = html.replace("__SCAN_SECTION__", scan_snapshot())
     html = html.replace("__BT_PERIOD__", bt["stats"]["period"])
     html = html.replace("__BT_FINAL__", _money(bt["stats"]["final"]))
     html = html.replace("__BT_RET_CLS__", "pos" if bt["stats"]["ret"] >= 0 else "neg")
