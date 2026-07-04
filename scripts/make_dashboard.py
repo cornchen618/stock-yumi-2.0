@@ -33,23 +33,22 @@ def _cls(v: float) -> str:
     return "pos" if v >= 0 else "neg"
 
 
-def strategy_section() -> str:
-    """策略規則總覽（規格來源：MOMENTUM.md / STRATEGY.md）。"""
+def strat1_rules() -> str:
     return """
-<h2>策略與買賣標準</h2>
-<div class="grid2">
 <div class="rulebox">
- <h3>動能組合（主力・月調倉）</h3>
  <ul>
   <li><b>買進</b>：每月最後交易日收盤，12-1 動能（近 12 個月報酬、跳過最近 1 個月）&gt; 0 且排名前 20，次日開盤等權買進（每檔＝權益÷20）</li>
   <li><b>續抱</b>：動能 &gt; 0 且排名 ≤ 40</li>
   <li><b>賣出</b>：跌出前 40 名 或 動能轉負 → 月底次日開盤市價賣出</li>
   <li><b>資格</b>：20日中位數量 ≥ 50萬股、金額 ≥ 3000萬、價 ≥ 10元</li>
-  <li><b>風控</b>：無個股停損（換血靠月調倉紀律）；開盤漲幅 ≥ 9.5% 放棄買單</li>
+  <li><b>風控</b>：無個股停損（換血靠月調倉紀律）；開盤漲幅 ≥ 9.5% 放棄買單；一個月只動作一次</li>
  </ul>
-</div>
+</div>"""
+
+
+def strat2_rules() -> str:
+    return """
 <div class="rulebox">
- <h3>波段 A/B/C（紙上觀察・未過上線門檻）</h3>
  <ul>
   <li><b>A 順勢突破</b>：多頭排列＋突破20/10日高或站回月線＋1.5倍量</li>
   <li><b>B 破底翻</b>：60日低檔跌破支撐後收復＋過昨高＋量能確認</li>
@@ -58,7 +57,6 @@ def strategy_section() -> str:
   <li><b>停利</b>：+2R 先出一半、停損上移至成本；獲利&gt;1R 後吊燈式移動停損（最高收盤−2.5ATR）；A/C 連2日收破月線出場</li>
   <li><b>部位</b>：單筆風險=權益1%、上限15%、大盤&lt;60日線停開新倉</li>
  </ul>
-</div>
 </div>"""
 
 
@@ -93,17 +91,17 @@ def momentum_snapshot(equity: float, names: dict) -> str:
                     f"<td class='pos'>{m * 100:+.0f}%</td><td>{price:g}</td>"
                     f"<td>{shares:,}</td><td>{status}</td></tr>")
     return f"""
-<h2>動能組合－目前排名前 20 <span class="note">（資料日 {asof:%Y-%m-%d}；即時快照，正式訊號以月底收盤為準）</span></h2>
+<h3>目前排名前 20──下月調倉候選預覽 <span class="note">（資料日 {asof:%Y-%m-%d}；每天變動，實際買賣以月底收盤排名為準）</span></h3>
 <table><tr><th>#</th><th>標的</th><th>12-1動能</th><th>收盤</th><th>建議股數</th><th>狀態</th></tr>
 {''.join(rows)}</table>
-<p class="note">買進標準：月底動能&gt;0且排前20｜賣出標準：跌出前40或動能轉負｜每檔目標金額＝權益÷20＝{equity / 20:,.0f} 元</p>"""
+<p class="note">每檔目標金額＝權益÷20＝{equity / 20:,.0f} 元｜「持有中」= holdings.csv 內的實際持股</p>"""
 
 
 def scan_snapshot() -> str:
     """最新波段掃描候選（output/scan_*.csv）。"""
     files = sorted((ROOT / "output").glob("scan_*.csv"))
     if not files:
-        return "<h2>波段掃描－最新候選</h2><p class='note'>尚無掃描結果（17:40 盤後任務會自動產生）。</p>"
+        return "<h3>最新候選</h3><p class='note'>尚無掃描結果（17:40 盤後任務會自動產生）。</p>"
     f = files[-1]
     day = f.stem.split("_")[-1]
     d = pd.read_csv(f, dtype={"symbol": str})
@@ -118,7 +116,7 @@ def scan_snapshot() -> str:
                     f"<td>{trig}</td><td>{r.close:g}</td><td class='neg'>{r.init_stop:g}</td>"
                     f"<td class='pos'>{r.target_partial:g}</td><td>{size}</td></tr>")
     return f"""
-<h2>波段掃描－最新候選 <span class="note">（資料日 {day[:4]}-{day[4:6]}-{day[6:]}；紙上觀察，未過上線門檻）</span></h2>
+<h3>最新候選 <span class="note">（資料日 {day[:4]}-{day[4:6]}-{day[6:]}）</span></h3>
 <table><tr><th>標的</th><th>策略</th><th>觸發</th><th>收盤</th><th>停損</th><th>停利(+2R)</th><th>建議</th></tr>
 {''.join(rows)}</table>
 <p class="note">停損＝跌破次日開盤出場｜停利＝到價先出一半、剩餘停損上移至成本後吊燈追蹤｜建議張數以 1% 風險計算</p>"""
@@ -168,6 +166,8 @@ def backtest_payload(src: Path) -> dict | None:
             "mdd": round(dd.min(), 1), "n": len(tr),
             "win": round(len(wins) / len(tr) * 100, 1) if len(tr) else 0,
             "fees": round(tr["fees"].sum()),
+            "top10_share": round(top["pnl"].sum() / wins["pnl"].sum() * 100) if len(wins) else 0,
+            "worst_pct": round(tr["pnl_pct"].min() * 100, 1) if len(tr) else 0,
         },
     }
 
@@ -251,15 +251,28 @@ HTML = """<!DOCTYPE html>
  .rulebox{background:#1b2027;border:1px solid #2a2f36;border-radius:8px;padding:4px 16px 10px}
  .rulebox h3{font-size:14px;margin:10px 0 6px}
  .rulebox ul{margin:0;padding-left:18px;font-size:13px;line-height:1.7}
+ .badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:12px;margin-left:8px;vertical-align:middle}
+ .b-live{background:#7a5d1e;color:#ffd27f}.b-paper{background:#37404d;color:#aab6c5}.b-sim{background:#1e4a6d;color:#9fd0f5}
+ details summary{cursor:pointer;list-style:none}
+ details summary h2{display:inline}
 </style></head><body>
 <h1>TWQuant 交易金流儀表板 <span class="note">產生時間 __GEN_TIME__</span></h1>
 <div class="wrap">
 __LIVE_SECTION__
-__STRAT_SECTION__
+<h2>策略① 動能組合 <span class="badge b-live">主力策略・每月只動作一次</span></h2>
+__S1_RULES__
 __MOM_SECTION__
+<hr style="border-color:#2a2f36">
+<h2>策略② 波段 A/B/C <span class="badge b-paper">研究中・僅紙上追蹤，勿實際下單</span></h2>
+__S2_RULES__
 __SCAN_SECTION__
 <hr style="border-color:#2a2f36">
-<h2>動能組合回測（__BT_PERIOD__，含全部成本）</h2>
+<details open>
+<summary><h2>策略① 歷史回測檢驗 <span class="badge b-sim">2019–2026 模擬交易・不是你的帳戶</span></h2>
+<span class="note">（點標題可收合）</span></summary>
+<p class="note">以下全部是「假設 2019 年起就照策略①執行 100 萬」的模擬結果。它的用途：在投入真錢之前檢驗策略是否值得執行，
+並預告實際操作時會經歷什麼——勝率不到四成、最深回撤約一半、獲利靠少數大波段。看懂這些，實盤遇到時才不會慌。
+（回測期間 __BT_PERIOD__，含全部成本；無下市股票資料，數字偏樂觀。紅=賺、綠=賠。）</p>
 <div class="cards">
  <div class="card"><div class="k">期末權益</div><div class="v">__BT_FINAL__</div></div>
  <div class="card"><div class="k">總報酬</div><div class="v __BT_RET_CLS__">__BT_RET__%</div></div>
@@ -274,11 +287,16 @@ __SCAN_SECTION__
  <div id="c_fees" class="chart"></div>
 </div>
 <div id="c_hist" class="chart"></div>
+<h3>模擬期間最賺與最賠的十筆</h3>
+<p class="note">重點不在個股，在兩個結構性事實：
+① 模擬總獲利的 <b>__TOP10_SHARE__%</b> 來自最賺的十筆——動能策略靠少數大贏家吃飯，
+實際操作時「提早獲利了結強勢股」等於自廢武功，這就是為什麼賣出只看排名不看獲利；
+② 最大單筆虧損 <b>__WORST_PCT__%</b>——月調倉換血讓單一地雷的傷害有上限，但個股月中無停損，需有心理準備。</p>
 <div class="grid2">
- <div><h2>獲利前十筆</h2><table id="t_top"></table></div>
- <div><h2>虧損前十筆</h2><table id="t_bot"></table></div>
+ <div><table id="t_top"></table></div>
+ <div><table id="t_bot"></table></div>
 </div>
-<p class="note">回測資料含存活者偏差（無下市股票），數字偏樂觀；詳見 MOMENTUM.md。紅=獲利、綠=虧損（台股慣例）。</p>
+</details>
 </div>
 <script>
 const BT = __BT_JSON__;
@@ -372,9 +390,12 @@ def main() -> None:
 
     html = HTML
     html = html.replace("__GEN_TIME__", f"{datetime.now():%Y-%m-%d %H:%M}")
-    html = html.replace("__STRAT_SECTION__", strategy_section())
+    html = html.replace("__S1_RULES__", strat1_rules())
+    html = html.replace("__S2_RULES__", strat2_rules())
     html = html.replace("__MOM_SECTION__", momentum_snapshot(equity, names))
     html = html.replace("__SCAN_SECTION__", scan_snapshot())
+    html = html.replace("__TOP10_SHARE__", str(bt["stats"]["top10_share"]))
+    html = html.replace("__WORST_PCT__", str(bt["stats"]["worst_pct"]))
     html = html.replace("__BT_PERIOD__", bt["stats"]["period"])
     html = html.replace("__BT_FINAL__", _money(bt["stats"]["final"]))
     html = html.replace("__BT_RET_CLS__", "pos" if bt["stats"]["ret"] >= 0 else "neg")
