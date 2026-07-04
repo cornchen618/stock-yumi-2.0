@@ -107,17 +107,27 @@ def scan_snapshot() -> str:
     d = pd.read_csv(f, dtype={"symbol": str})
     if "target_partial" not in d.columns:  # 舊版 CSV 相容
         d["target_partial"] = (d["close"] + 2 * (d["close"] - d["init_stop"])).round(2)
+    if "rank_score" in d.columns:
+        d = d.sort_values(["strategy", "rank_score"], ascending=[True, False])
+    else:
+        d = d.sort_values("strategy")
+
     rows = []
-    for r in d.itertuples():
-        trig = TRIGGER_ZH.get(str(r.trigger), str(r.trigger))
-        lots = int(r.suggest_shares) // 1000
-        size = f"{lots}張" if lots else "資金不足"
-        rows.append(f"<tr><td>{r.symbol} {getattr(r, 'name', '')}</td><td>{STRAT_ZH.get(r.strategy, r.strategy)}</td>"
-                    f"<td>{trig}</td><td>{r.close:g}</td><td class='neg'>{r.init_stop:g}</td>"
-                    f"<td class='pos'>{r.target_partial:g}</td><td>{size}</td></tr>")
+    for strat in ("A", "B", "C"):
+        g = d[d["strategy"] == strat]
+        if not len(g):
+            continue
+        rows.append(f"<tr><td colspan='6' class='grp'>{STRAT_ZH.get(strat, strat)}（{len(g)} 檔，組內按量能強度排序）</td></tr>")
+        for r in g.itertuples():
+            trig = TRIGGER_ZH.get(str(r.trigger), str(r.trigger))
+            lots = int(r.suggest_shares) // 1000
+            size = f"{lots}張" if lots else "資金不足"
+            rows.append(f"<tr><td>{r.symbol} {getattr(r, 'name', '')}</td>"
+                        f"<td>{trig}</td><td>{r.close:g}</td><td class='neg'>{r.init_stop:g}</td>"
+                        f"<td class='pos'>{r.target_partial:g}</td><td>{size}</td></tr>")
     return f"""
 <h3>最新候選 <span class="note">（資料日 {day[:4]}-{day[4:6]}-{day[6:]}）</span></h3>
-<table><tr><th>標的</th><th>策略</th><th>觸發</th><th>收盤</th><th>停損</th><th>停利(+2R)</th><th>建議</th></tr>
+<table><tr><th>標的</th><th>觸發</th><th>收盤</th><th>停損</th><th>停利(+2R)</th><th>建議</th></tr>
 {''.join(rows)}</table>
 <p class="note">停損＝跌破次日開盤出場｜停利＝到價先出一半、剩餘停損上移至成本後吊燈追蹤｜建議張數以 1% 風險計算</p>"""
 
@@ -251,6 +261,7 @@ HTML = """<!DOCTYPE html>
  .rulebox{background:#1b2027;border:1px solid #2a2f36;border-radius:8px;padding:4px 16px 10px}
  .rulebox h3{font-size:14px;margin:10px 0 6px}
  .rulebox ul{margin:0;padding-left:18px;font-size:13px;line-height:1.7}
+ .grp{background:#232a33;color:#ffd27f;font-weight:600;text-align:left !important;padding:8px 10px}
  .badge{display:inline-block;padding:2px 10px;border-radius:10px;font-size:12px;margin-left:8px;vertical-align:middle}
  .b-live{background:#7a5d1e;color:#ffd27f}.b-paper{background:#37404d;color:#aab6c5}.b-sim{background:#1e4a6d;color:#9fd0f5}
  details summary{cursor:pointer;list-style:none}
