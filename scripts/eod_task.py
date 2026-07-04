@@ -112,6 +112,12 @@ def main() -> None:
             send(f":x: 動能掃描失敗\n```{out[-500:]}```")
     else:
         send(":calendar: 今日非月底，動能組合無動作。盤後流程完成。")
+
+    # 4. 重生金流儀表板（失敗不影響主流程）
+    code, out = run(["scripts/make_dashboard.py"])
+    log(f"dashboard exit={code}")
+    if code != 0:
+        log(f"dashboard error: {out[-300:]}")
     log("EOD task done")
 
 

@@ -6,6 +6,7 @@ logs/
 # 個人狀態與帳戶資訊（不上傳）
 holdings.csv
 settings.json
+transactions.csv
 
 # 執行日誌
 *.log
