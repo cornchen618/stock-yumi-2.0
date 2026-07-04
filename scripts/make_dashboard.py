@@ -269,6 +269,7 @@ HTML = """<!DOCTYPE html>
 </style></head><body>
 <h1>TWQuant 交易金流儀表板 <span class="note">產生時間 __GEN_TIME__</span></h1>
 <div class="wrap">
+__BRIEF_SECTION__
 __LIVE_SECTION__
 <h2>策略① 動能組合 <span class="badge b-live">主力策略・每月只動作一次</span></h2>
 __S1_RULES__
@@ -399,7 +400,21 @@ def main() -> None:
         equity = float(json.loads(sp.read_text(encoding="utf-8")).get("equity", equity))
     names = load_names(ROOT / "data" / "universe.csv")
 
+    brief_f = ROOT / "output" / "brief.txt"
+    if brief_f.exists():
+        brief_html = (
+            "<details open><summary><h2>今日決策簡報（八問）"
+            "<span class='badge b-live'>每日 17:40 更新</span></h2>"
+            "<span class='note'>（點標題可收合）</span></summary>"
+            f"<pre style='background:#161a20;border:1px solid #2a2f36;border-radius:8px;"
+            f"padding:14px;font-size:13px;line-height:1.65;white-space:pre-wrap'>{brief_f.read_text(encoding='utf-8')}</pre>"
+            "</details><hr style='border-color:#2a2f36'>"
+        )
+    else:
+        brief_html = ""
+
     html = HTML
+    html = html.replace("__BRIEF_SECTION__", brief_html)
     html = html.replace("__GEN_TIME__", f"{datetime.now():%Y-%m-%d %H:%M}")
     html = html.replace("__S1_RULES__", strat1_rules())
     html = html.replace("__S2_RULES__", strat2_rules())

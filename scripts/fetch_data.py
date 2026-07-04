@@ -42,16 +42,26 @@ ISIN_URLS = {
 
 
 def fetch_universe() -> pd.DataFrame:
-    """回傳 DataFrame(code, name, suffix)。僅 4 碼數字普通股，排除 00/91 開頭。"""
+    """回傳 DataFrame(code, name, suffix, industry)。僅 4 碼數字普通股，排除 00/91 開頭。
+
+    ISIN 頁每列格式：代號名稱 | ISIN | 上市日 | 市場別 | 產業別 | CFI | 備註
+    """
     rows = []
     for suffix, url in ISIN_URLS.items():
         r = requests.get(url, timeout=60, headers={"User-Agent": "Mozilla/5.0"})
         r.encoding = "big5"
-        # 格式：<td ...>1101　台泥</td>（全形空白分隔代號與名稱）
-        for code, name in re.findall(r">(\d{4})　([^<]+)<", r.text):
+        for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", r.text, flags=re.S):
+            tds = re.findall(r"<td[^>]*>(.*?)</td>", tr, flags=re.S)
+            if len(tds) < 5:
+                continue
+            m = re.match(r"(\d{4})　(.+)", tds[0].strip())
+            if not m:
+                continue
+            code, name = m.group(1), m.group(2).strip()
             if code.startswith("00") or code.startswith("91"):
                 continue  # ETF / TDR
-            rows.append({"code": code, "name": name.strip(), "suffix": suffix})
+            industry = re.sub(r"<[^>]+>", "", tds[4]).strip() or "未分類"
+            rows.append({"code": code, "name": name, "suffix": suffix, "industry": industry})
         time.sleep(1.0)
     df = pd.DataFrame(rows).drop_duplicates("code", keep="first").sort_values("code")
     if len(df) < 500:

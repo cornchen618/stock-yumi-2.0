@@ -25,6 +25,8 @@ class MomentumConfig:
     top_n: int = 20
     band_rank: int = 40          # 持股排名低於此才賣出
     overlay_pool: int = 0        # >0：雙重排序——動能前 N 名中依 overlay 分數取 top_n（0=關閉）
+    exposure_ma: int = 0         # >0：訊號日大盤 < MA(N) 時，新買部位目標金額乘以 exposure_bear_mult
+    exposure_bear_mult: float = 0.5
     liq_vol_min: float = 500_000
     liq_amt_min: float = 30_000_000
     liq_window: int = 20
@@ -85,6 +87,10 @@ class MomentumBacktester:
         cal = benchmark.index
         if overlay is not None:
             overlay = overlay.reindex(cal)
+        bench_bull = None
+        if cfg.exposure_ma > 0:
+            ma = benchmark["close"].rolling(cfg.exposure_ma, min_periods=cfg.exposure_ma).mean()
+            bench_bull = (benchmark["close"] > ma).fillna(True)  # 暖機期不減碼
 
         # ---- 面板（全歷史，供指標暖機；主迴圈僅走 [start, end]）----
         close = pd.DataFrame({s: d["close"] for s, d in data.items()}).reindex(cal)
@@ -192,7 +198,10 @@ class MomentumBacktester:
                     ov = overlay.iloc[i_sig].reindex(pool)
                     buy_order = sorted(pool, key=lambda s: -(ov[s] if pd.notna(ov[s]) else -1e18))
                 slots = cfg.top_n - len(positions) - len(pending_sells)
-                target_value = last_equity / cfg.top_n
+                expo_mult = 1.0
+                if bench_bull is not None and not bool(bench_bull.iloc[i_sig]):
+                    expo_mult = cfg.exposure_bear_mult
+                target_value = last_equity * expo_mult / cfg.top_n
                 for sym in buy_order:
                     if slots <= 0:
                         break

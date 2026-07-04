@@ -113,7 +113,13 @@ def main() -> None:
     else:
         send(":calendar: 今日非月底，動能組合無動作。盤後流程完成。")
 
-    # 4. 重生金流儀表板（失敗不影響主流程）
+    # 4. 八問決策簡報（發 Discord＋存檔供儀表板嵌入）
+    code, out = run(["scripts/brief.py", "--discord"])
+    log(f"brief exit={code}")
+    if code != 0:
+        log(f"brief error: {out[-300:]}")
+
+    # 5. 重生金流儀表板（失敗不影響主流程）
     code, out = run(["scripts/make_dashboard.py"])
     log(f"dashboard exit={code}")
     if code != 0:
