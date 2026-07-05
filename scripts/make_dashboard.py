@@ -117,19 +117,22 @@ def scan_snapshot() -> str:
         g = d[d["strategy"] == strat]
         if not len(g):
             continue
-        rows.append(f"<tr><td colspan='6' class='grp'>{STRAT_ZH.get(strat, strat)}（{len(g)} 檔，組內按量能強度排序）</td></tr>")
+        rows.append(f"<tr><td colspan='7' class='grp'>{STRAT_ZH.get(strat, strat)}（{len(g)} 檔，組內按量能強度排序）</td></tr>")
         for r in g.itertuples():
             trig = TRIGGER_ZH.get(str(r.trigger), str(r.trigger))
-            lots = int(r.suggest_shares) // 1000
+            shares = int(r.suggest_shares)
+            lots = shares // 1000
             size = f"{lots}張" if lots else "資金不足"
+            loss = getattr(r, "max_loss", round((r.close - r.init_stop) * shares))
+            loss_txt = f"−{loss:,.0f}" if shares else "—"
             rows.append(f"<tr><td>{r.symbol} {getattr(r, 'name', '')}</td>"
                         f"<td>{trig}</td><td>{r.close:g}</td><td class='neg'>{r.init_stop:g}</td>"
-                        f"<td class='pos'>{r.target_partial:g}</td><td>{size}</td></tr>")
+                        f"<td class='pos'>{r.target_partial:g}</td><td>{size}</td><td class='neg'>{loss_txt}</td></tr>")
     return f"""
 <h3>最新候選 <span class="note">（資料日 {day[:4]}-{day[4:6]}-{day[6:]}）</span></h3>
-<table><tr><th>標的</th><th>觸發</th><th>收盤</th><th>停損</th><th>停利(+2R)</th><th>建議</th></tr>
+<table><tr><th>標的</th><th>觸發</th><th>收盤</th><th>停損</th><th>停利(+2R)</th><th>建議</th><th>最大虧損</th></tr>
 {''.join(rows)}</table>
-<p class="note">停損＝跌破次日開盤出場｜停利＝到價先出一半、剩餘停損上移至成本後吊燈追蹤｜建議張數以 1% 風險計算</p>"""
+<p class="note">停損＝跌破次日開盤出場｜停利＝到價先出一半、剩餘停損上移至成本後吊燈追蹤｜最大虧損＝(收盤−停損)×建議股數＝停損打到時實際賠的錢（≈權益1%）</p>"""
 
 
 def backtest_payload(src: Path) -> dict | None:

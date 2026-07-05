@@ -83,7 +83,7 @@ def table_png(
 
 def scan_table_png(candidates: pd.DataFrame, asof_label: str, strat_zh: dict, trigger_zh: dict) -> bytes:
     """波段候選（按策略分組）表格圖。"""
-    headers = ["標的", "觸發", "收盤", "停損", "停利+2R", "建議"]
+    headers = ["標的", "觸發", "收盤", "停損", "停利+2R", "建議", "最大虧損"]
     rows: list[list] = []
     group_idx: set[int] = set()
     d = candidates.copy()
@@ -94,22 +94,25 @@ def scan_table_png(candidates: pd.DataFrame, asof_label: str, strat_zh: dict, tr
         if not len(g):
             continue
         group_idx.add(len(rows))
-        rows.append([f"{strat_zh.get(strat, strat)}（{len(g)} 檔）", "", "", "", "", ""])
+        rows.append([f"{strat_zh.get(strat, strat)}（{len(g)} 檔）", "", "", "", "", "", ""])
         for r in g.itertuples():
-            lots = int(r.suggest_shares) // 1000
+            shares = int(r.suggest_shares)
+            lots = shares // 1000
             tgt = getattr(r, "target_partial", round(r.close + 2 * (r.close - r.init_stop), 2))
+            loss = getattr(r, "max_loss", round((r.close - r.init_stop) * shares))
             rows.append([
                 f"{r.symbol} {getattr(r, 'name', '')}",
                 trigger_zh.get(str(r.trigger), str(r.trigger)),
                 f"{r.close:g}", f"{r.init_stop:g}", f"{tgt:g}",
                 f"{lots}張" if lots else "資金不足",
+                f"−{loss:,.0f}" if shares else "—",
             ])
     return table_png(
         f"波段掃描候選　{asof_label}　※紙上觀察，未過上線門檻",
         headers, rows,
-        col_colors={3: GREEN, 4: RED},
+        col_colors={3: GREEN, 4: RED, 6: GREEN},
         group_rows=group_idx,
-        footer="停損=跌破次日開盤出場｜停利=+2R先出一半、停損上移成本後吊燈追蹤｜張數以1%風險計算",
+        footer="停損=跌破次日開盤出場｜停利=+2R先出一半、停損上移成本後吊燈追蹤｜最大虧損=(收盤−停損)×建議股數，即停損打到時的實際金額（≈權益1%）",
     )
 
 

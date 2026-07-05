@@ -55,16 +55,29 @@ def generate_sections() -> tuple[pd.Timestamp, str, list[tuple[str, str]]]:
     n_pos = int((mom_pos > 0).sum())
     top20 = mom_pos.sort_values(ascending=False).head(20)
 
-    # 波段最新候選
+    # 波段最新候選（含逐檔虧損金額套用）
     scans = sorted((ROOT / "output").glob("scan_*.csv"))
     scan_line = "尚無掃描結果"
+    loss_examples: list[str] = []
+    n_scan_ac = 0
     if scans:
         sc = pd.read_csv(scans[-1], dtype={"symbol": str})
         cnt = sc.groupby("strategy").size()
+        n_scan_ac = int(cnt.get("A", 0) + cnt.get("C", 0))
         day = scans[-1].stem.split("_")[-1]
         scan_line = (f"{day[:4]}-{day[4:6]}-{day[6:]} 掃出 "
                      + "、".join(f"{STRAT_ZH.get(k, k)} {v} 檔" for k, v in cnt.items())
                      + "（紙上觀察）")
+        buyable = sc[sc["suggest_shares"] > 0]
+        if "rank_score" in buyable.columns:
+            buyable = buyable.sort_values("rank_score", ascending=False)
+        for r in buyable.head(5).itertuples():
+            shares = int(r.suggest_shares)
+            loss = getattr(r, "max_loss", round((r.close - r.init_stop) * shares))
+            loss_examples.append(
+                f"{r.symbol} {getattr(r, 'name', '')}：買 {shares // 1000} 張 @ {r.close:g}，"
+                f"停損 {r.init_stop:g} → 最多虧 **{loss:,.0f} 元**（權益 {loss / equity * 100:.1f}%）"
+            )
 
     # 動能回測滾動 12 個月（策略健康度參考）
     health_line = "回測輸出不存在"
@@ -88,24 +101,26 @@ def generate_sections() -> tuple[pd.Timestamp, str, list[tuple[str, str]]]:
 
     sections: list[tuple[str, str]] = [
         (f"1︱市場適合做多嗎　{light_icon} {ms.light}燈", "\n".join(ms.detail)),
-        (f"2︱應投入幾成資金　→ 上限 {ms.exposure_pct}%",
-         f"燈號治理規則：綠100／黃60／紅20\n動能組合：{n_pos} 檔動能>0"
-         f"（{'足額可滿倉' if n_pos >= 20 else f'自然縮至 {min(n_pos, 20)} 檔'}）\n"
-         "註：MA200 自動減碼經檢定不採用（傷 Sharpe），總量由你依燈號控制"),
+        (f"2︱應投入幾成資金　→ 上限 {ms.exposure_pct}% = {equity * ms.exposure_pct / 100:,.0f} 元",
+         f"以你目前權益 {equity:,.0f} 元套用：\n"
+         f"・動能組合：{min(n_pos, 20)} 檔 × {equity / 20:,.0f} 元 = {min(n_pos, 20) * equity / 20:,.0f} 元"
+         f"（{n_pos} 檔動能>0，{'足額' if n_pos >= 20 else '不足額，缺額留現金'}）\n"
+         f"・燈號治理：綠100／黃60／紅20；今日 {ms.light}燈 → 最多投入 {equity * ms.exposure_pct / 100:,.0f} 元"),
         ("3︱哪些類股轉強（20日等權前五）", "\n".join(sec_lines)),
         ("4︱哪些股票符合條件",
          f"動能前 20：{top5_line}…\n波段：{scan_line}\n完整名單與價位見掃描表格圖與儀表板"),
-        ("5︱這筆最多虧多少",
-         f"波段：單筆風險 = 權益×1% = {equity * 0.01:,.0f} 元（停損價逐檔列出）\n"
-         f"動能：單檔投入 {equity / 20:,.0f} 元、無個股停損（回測最大單筆約 −24%，靠 20 檔分散）\n"
-         f"組合層：單日新增風險上限 4% = {equity * 0.04:,.0f} 元"),
+        ("5︱這筆最多虧多少（今日候選逐檔套用）",
+         (("\n".join(loss_examples) + "\n") if loss_examples else "今日無可建倉候選\n")
+         + f"動能：單檔 {equity / 20:,.0f} 元無停損；若重演回測最差單筆 −24% ≈ 虧 {equity / 20 * 0.24:,.0f} 元/檔\n"
+         f"組合層：單日新增風險上限 {equity * 0.04:,.0f} 元（4%）｜完整逐檔虧損金額見掃描表「最大虧損」欄"),
         ("6︱連續虧損降部位嗎　→ 會（自動分級）",
          "回撤>8% 波段風險減半 → >12% 波段停新倉 → >20% 動能曝險減半 → >30% 全停人工檢討\n"
          "目前狀態：尚未實盤，回撤 0%，正常層級"),
         ("7︱大盤轉弱停止進場嗎　→ 會（自動執行）",
-         f"大盤<60日線 → 波段 A/C 停開新倉、B 風險減半\n"
-         f"目前：大盤{'高於' if ms.taiex_close > ms.ma60 else '低於'} 60 日線 → "
-         f"波段新倉{'開放' if ms.taiex_close > ms.ma60 else '停止'}中"),
+         f"規則：大盤<60日線 → 波段 A/C 停開新倉、B 風險減半\n"
+         f"套用今日：大盤 {ms.taiex_close:,.0f} {'＞' if ms.taiex_close > ms.ma60 else '＜'} 60日線 {ms.ma60:,.0f} → "
+         + (f"今日 A/C 共 {n_scan_ac} 檔候選正常放行" if ms.taiex_close > ms.ma60
+            else f"今日 A/C 共 {n_scan_ac} 檔候選已被自動擋下")),
         ("8︱策略失效了嗎",
          f"{health_line}\n判定框架：實盤後每季重跑比對；勝率/滑價偏離 2σ 或 PF 連兩季<1 → 停機\n"
          "目前：實績累積中（需 ≥100 筆），所有訊號已自動存檔"),

@@ -78,6 +78,7 @@ def scan(
                 "risk_per_share": round(rps, 2),
                 "suggest_shares": shares,
                 "suggest_notional": round(shares * close),
+                "max_loss": round(rps * shares),   # 停損打到時的實際虧損金額
                 "rank_score": round(float(r["rank_score"]), 2),
             })
 
