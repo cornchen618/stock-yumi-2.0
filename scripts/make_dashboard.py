@@ -189,18 +189,33 @@ def live_payload() -> dict | None:
     tx_f = ROOT / "transactions.csv"
     if not tx_f.exists():
         return None
-    tx = pd.read_csv(tx_f, dtype={"symbol": str}, parse_dates=["date"]).sort_values("date")
+    tx = pd.read_csv(tx_f, dtype={"symbol": str})
     if not len(tx):
         return None
+    tx["date"] = pd.to_datetime(tx["date"], format="mixed")
+    tx = tx.sort_values("date")
     names = load_names(ROOT / "data" / "universe.csv")
     px = pd.read_parquet(ROOT / "data" / "ohlcv.parquet", columns=["date", "symbol", "raw_close"])
     last_px = px.sort_values("date").groupby("symbol")["raw_close"].last()
 
     pos: dict[str, dict] = {}
     realized = fees_total = invested = recovered = 0.0
+    dividends = 0.0
     flows = []
     for r in tx.itertuples():
         amt = r.shares * r.price
+        # 股利科目：現金股利入帳 / 配股增股（成本不變、均價自然攤低）
+        if r.action == "DIV_CASH":
+            realized += amt
+            dividends += amt
+            recovered += amt
+            flows.append([f"{r.date:%Y-%m-%d}", amt])
+            continue
+        if r.action == "DIV_STOCK":
+            p = pos.get(r.symbol)
+            if p:
+                p["sh"] += int(r.shares)
+            continue
         fee = float(r.fee) if "fee" in tx.columns and pd.notna(r.fee) else (
             amt * COMM if r.action == "BUY" else amt * (COMM + TAX))
         fees_total += fee
@@ -236,7 +251,8 @@ def live_payload() -> dict | None:
         "flows": flows, "holdings": holding_rows,
         "stats": {"invested": round(invested), "recovered": round(recovered),
                   "mkt_val": round(mkt_val), "realized": round(realized),
-                  "unreal": round(unreal), "fees": round(fees_total)},
+                  "unreal": round(unreal), "fees": round(fees_total),
+                  "dividends": round(dividends)},
     }
 
 
@@ -360,8 +376,9 @@ LIVE_SECTION = """<h2>實盤帳戶（transactions.csv）</h2>
  <div class="card"><div class="k">累計投入</div><div class="v">__L_INV__</div></div>
  <div class="card"><div class="k">累計回收</div><div class="v">__L_REC__</div></div>
  <div class="card"><div class="k">持股市值</div><div class="v">__L_MKT__</div></div>
- <div class="card"><div class="k">已實現損益</div><div class="v __L_R_CLS__">__L_REAL__</div></div>
+ <div class="card"><div class="k">已實現損益(含股利)</div><div class="v __L_R_CLS__">__L_REAL__</div></div>
  <div class="card"><div class="k">未實現損益</div><div class="v __L_U_CLS__">__L_UNREAL__</div></div>
+ <div class="card"><div class="k">股利收入</div><div class="v">__L_DIV__</div></div>
  <div class="card"><div class="k">累計費稅</div><div class="v">__L_FEES__</div></div>
 </div>
 <div id="c_live_flow" class="chart"></div>
@@ -445,6 +462,7 @@ def main() -> None:
         sec = sec.replace("__L_REAL__", _money(s["realized"]))
         sec = sec.replace("__L_U_CLS__", "pos" if s["unreal"] >= 0 else "neg")
         sec = sec.replace("__L_UNREAL__", _money(s["unreal"]))
+        sec = sec.replace("__L_DIV__", _money(s.get("dividends", 0)))
         sec = sec.replace("__L_FEES__", _money(s["fees"]))
         html = html.replace("__LIVE_SECTION__", sec)
         html = html.replace("__LIVE_SCRIPT__", LIVE_SCRIPT.replace("__LV_JSON__", json.dumps(lv, ensure_ascii=False)))

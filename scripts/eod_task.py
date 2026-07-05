@@ -128,6 +128,13 @@ def main() -> None:
     else:
         send_embed("📅 今日非月底", "動能組合無動作，盤後流程完成。", color=C_GRAY)
 
+    # 3.5 持股除權息檢查（預告/入帳/監控校正檔；無持股時靜默）
+    if (ROOT / "holdings.csv").exists():
+        code, out = run(["scripts/check_dividends.py"], timeout=600)
+        log(f"dividends exit={code}")
+        if code != 0:
+            log(f"dividends error: {out[-300:]}")
+
     # 4. 八問決策簡報（發 Discord＋存檔供儀表板嵌入）
     code, out = run(["scripts/brief.py", "--discord"])
     log(f"brief exit={code}")

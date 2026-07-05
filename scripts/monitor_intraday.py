@@ -76,6 +76,24 @@ def load_state() -> tuple[dict[str, int], pd.DataFrame | None, dict[str, float]]
         px = px[px["symbol"].isin(watch)]
         last = px.sort_values("date").groupby("symbol").tail(1)
         prev_close = dict(zip(last["symbol"], last["raw_close"]))
+
+    # 今日除權息 → 校正昨收基準（配息/配股造成的開低不是下跌，避免 -8% 誤報）
+    div_f = ROOT / "data" / "dividends_upcoming.csv"
+    if div_f.exists():
+        try:
+            dv = pd.read_csv(div_f, dtype={"symbol": str})
+            today_str = f"{_now():%Y-%m-%d}"
+            for r in dv[dv["ex_date"] == today_str].itertuples():
+                if r.symbol in prev_close:
+                    pc = prev_close[r.symbol]
+                    if r.kind == "CASH":
+                        prev_close[r.symbol] = pc - float(r.per_share)
+                    else:  # STOCK：每股配 per_share/10 股 → 除權參考價 = 昨收/(1+配股率)
+                        prev_close[r.symbol] = pc / (1.0 + float(r.per_share) / 10.0)
+                    print(f"[div] {r.symbol} 今日{('除息' if r.kind == 'CASH' else '除權')}，"
+                          f"警示基準 {pc:g} → {prev_close[r.symbol]:.2f}")
+        except Exception as e:  # noqa: BLE001 - 校正失敗不影響監控主功能
+            print(f"[div] 除權息校正失敗：{e}")
     return holdings, rebalance, prev_close
 
 
