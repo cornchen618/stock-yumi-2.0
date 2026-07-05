@@ -23,8 +23,9 @@ sys.path.insert(0, str(ROOT))
 
 from qts.config import Config
 from qts.data import load_benchmark, load_names, load_ohlcv
-from qts.notify import send
-from qts.scanner import format_rebalance_discord, format_scan_discord, scan
+from qts.notify import C_BLUE, C_GRAY, C_GREEN, C_RED, C_YELLOW, send_embed, send_png
+from qts.render import rebalance_table_png, scan_table_png
+from qts.scanner import STRAT_ZH, TRIGGER_ZH, scan
 
 PY = sys.executable
 
@@ -59,13 +60,13 @@ def main() -> None:
     if sp.exists():
         equity = float(json.loads(sp.read_text(encoding="utf-8")).get("equity", equity))
 
-    send(f":gear: **盤後更新開始 {today:%Y-%m-%d}**（資料下載約 3 分鐘）")
+    send_embed(f"⚙️ 盤後更新開始 {today:%Y-%m-%d}", "資料下載約 3 分鐘", color=C_BLUE)
 
     # 1. 更新價格
     code, out = run(["scripts/fetch_data.py", "--refresh"])
     log(f"fetch_data exit={code}")
     if code != 0:
-        send(f":x: 價格資料更新失敗，今日流程中止。\n```{out[-800:]}```")
+        send_embed("❌ 價格資料更新失敗", f"今日流程中止。\n```{out[-700:]}```", color=C_RED)
         return
 
     # 假日/資料未出偵測
@@ -73,7 +74,7 @@ def main() -> None:
     last_day = pd.to_datetime(px_dates["date"]).max().date()
     if last_day != today.date():
         log(f"last data day {last_day} != today, stop")
-        send(f":zzz: 最新資料日為 {last_day}（今日休市或資料未出），流程結束。")
+        send_embed("💤 今日休市或資料未出", f"最新資料日為 {last_day}，流程結束。", color=C_GRAY)
         return
 
     # 2. 波段掃描（直接呼叫核心，不再截斷字串）
@@ -84,15 +85,25 @@ def main() -> None:
     names = load_names(ROOT / "data" / "universe.csv")
     try:
         res = scan(data, benchmark, cfg, equity, names)
-        if len(res.candidates):
+        c = res.candidates
+        n_a = int((c["strategy"] == "A").sum()) if len(c) else 0
+        n_b = int((c["strategy"] == "B").sum()) if len(c) else 0
+        n_c = int((c["strategy"] == "C").sum()) if len(c) else 0
+        send_embed(
+            f"📋 波段掃描 {res.asof:%m/%d}（紙上觀察，勿實單）",
+            f"市場濾網：{'多頭 ✅ 三策略皆可' if res.bull else '空頭 ⛔ A/C 停用、B 風險減半'}\n"
+            f"候選　A:{n_a}　B:{n_b}　C:{n_c}｜壓縮觀察 {len(res.watch)} 檔",
+            color=C_GREEN if res.bull else C_RED,
+        )
+        if len(c):
             out_csv = ROOT / "output" / f"scan_{res.asof:%Y%m%d}.csv"
             out_csv.parent.mkdir(parents=True, exist_ok=True)
-            res.candidates.to_csv(out_csv, index=False, encoding="utf-8-sig")
-        send(format_scan_discord(res))
-        log(f"scan done: {len(res.candidates)} candidates")
+            c.to_csv(out_csv, index=False, encoding="utf-8-sig")
+            send_png(scan_table_png(c, f"{res.asof:%Y-%m-%d}", STRAT_ZH, TRIGGER_ZH), filename="scan.png")
+        log(f"scan done: {len(c)} candidates")
     except Exception as e:  # noqa: BLE001
         log(f"scan error: {e}")
-        send(f":x: 波段掃描失敗：{e}")
+        send_embed("❌ 波段掃描失敗", str(e)[:500], color=C_RED)
 
     # 3. 月底 → 動能換股清單
     if is_last_weekday_of_month(today):
@@ -107,11 +118,15 @@ def main() -> None:
             if "name" not in reb.columns:
                 reb["name"] = reb["symbol"].map(names)
             reb["name"] = reb["name"].fillna(reb["symbol"].map(names)).fillna("")
-            send(format_rebalance_discord(reb, f"{today:%m/%d}", equity))
+            send_png(rebalance_table_png(reb, f"{today:%m/%d}", equity), filename="rebalance.png",
+                     content="💰 **動能組合月度換股清單**（明日開盤執行）")
+            send_embed("👉 明日執行步驟",
+                       "① 先掛賣單（開盤市價）② 再掛買單 ③ 開盤漲幅≥9.5% 的買單刪掉\n"
+                       "④ 成交後更新 holdings.csv、settings.json", color=C_YELLOW)
         else:
-            send(f":x: 動能掃描失敗\n```{out[-500:]}```")
+            send_embed("❌ 動能掃描失敗", f"```{out[-500:]}```", color=C_RED)
     else:
-        send(":calendar: 今日非月底，動能組合無動作。盤後流程完成。")
+        send_embed("📅 今日非月底", "動能組合無動作，盤後流程完成。", color=C_GRAY)
 
     # 4. 八問決策簡報（發 Discord＋存檔供儀表板嵌入）
     code, out = run(["scripts/brief.py", "--discord"])

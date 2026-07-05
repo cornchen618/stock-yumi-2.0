@@ -23,8 +23,9 @@ sys.path.insert(0, str(ROOT))
 
 from qts.config import Config
 from qts.data import load_benchmark, load_names, load_ohlcv
-from qts.notify import send
-from qts.scanner import format_scan_discord, scan
+from qts.notify import C_BLUE, C_GRAY, send_embed, send_png
+from qts.render import scan_table_png
+from qts.scanner import STRAT_ZH, TRIGGER_ZH, scan
 
 # 盤中累積量占比曲線（分鐘 → 累積比例），線性內插
 _CURVE = [(0, 0.08), (30, 0.22), (60, 0.35), (120, 0.52), (180, 0.65),
@@ -91,7 +92,7 @@ def main() -> None:
 
     today_bars = fetch_today_bars(liquid, sfx)
     if len(today_bars) < len(liquid) * 0.3:
-        send(":satellite: 盤中預掃：今日盤中資料不足（可能休市），跳過。")
+        send_embed("📡 盤中預掃跳過", "今日盤中資料不足（可能休市）。", color=C_GRAY)
         return
 
     prog = vol_progress(now)
@@ -122,11 +123,17 @@ def main() -> None:
              "close": [r["Close"]], "volume": [r["Volume"]]}, index=[today])])
 
     res = scan(data2, bench2, Config(), equity, names, asof=today)
-    intro = (f":satellite: **盤中預掃 {now:%H:%M}**（量能以進度 {prog * 100:.0f}% 推估全日量）\n"
-             f"_預估性質：收盤前價量可能變化，正式訊號以 17:40 盤後掃描為準_")
-    send(intro)
-    send(format_scan_discord(res))
-    print(f"preview sent: {len(res.candidates)} candidates from {len(data2)} symbols")
+    c = res.candidates
+    n_a = int((c["strategy"] == "A").sum()) if len(c) else 0
+    n_b = int((c["strategy"] == "B").sum()) if len(c) else 0
+    n_c = int((c["strategy"] == "C").sum()) if len(c) else 0
+    send_embed(f"📡 盤中預掃 {now:%H:%M}",
+               f"量能以進度 {prog * 100:.0f}% 推估全日量｜候選　A:{n_a}　B:{n_b}　C:{n_c}\n"
+               "**預估性質**：收盤前價量可能變化，正式訊號以 17:40 盤後掃描為準",
+               color=C_BLUE)
+    if len(c):
+        send_png(scan_table_png(c, f"{now:%m/%d %H:%M} 預估", STRAT_ZH, TRIGGER_ZH), filename="preview.png")
+    print(f"preview sent: {len(c)} candidates from {len(data2)} symbols")
 
 
 if __name__ == "__main__":

@@ -26,7 +26,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from qts.data import load_names
-from qts.notify import send
+from qts.notify import C_BLUE, C_GRAY, C_RED, C_YELLOW, send_embed
 
 NAMES = load_names(ROOT / "data" / "universe.csv")
 
@@ -108,25 +108,25 @@ def main() -> None:
     holdings, rebalance, prev_close = load_state()
 
     # ---- 盤前摘要 ----
-    lines = [f":sunrise: **盤前摘要 {_now():%Y-%m-%d}**"]
+    fields = []
     if holdings:
-        lines.append(f"持股 {len(holdings)} 檔：" + "、".join(f"{label(s)}({n}股)" for s, n in holdings.items()))
+        fields.append(("持股", "、".join(f"{label(s)}({n}股)" for s, n in holdings.items())[:1000], False))
     else:
-        lines.append("目前空手（holdings.csv 無持股）")
+        fields.append(("持股", "空手（holdings.csv 無持股）", True))
     if rebalance is not None:
         buys = rebalance[rebalance["action"] == "BUY"]
         sells = rebalance[rebalance["action"] == "SELL"]
-        lines.append(f":arrows_counterclockwise: **今日為換股執行日**：賣 {len(sells)} 檔 → 買 {len(buys)} 檔")
+        fields.append(("今日待辦", f"🔄 換股執行日：賣 {len(sells)} 檔 → 買 {len(buys)} 檔", True))
         if len(sells):
-            lines.append("賣出（開盤市價）：" + "、".join(label(s) for s in sells["symbol"]))
+            fields.append(("賣出（開盤市價）", "、".join(label(s) for s in sells["symbol"])[:1000], False))
         if len(buys):
-            lines.append("買進（開盤市價；開盤漲幅≥9.5% 放棄）：")
-            for _, r in buys.iterrows():
-                lines.append(f"  {label(r['symbol'])}  {int(r['suggest_shares'])} 股（約 {int(r['suggest_notional']):,} 元）")
+            buy_lines = [f"{label(r['symbol'])}　{int(r['suggest_shares'])} 股（約 {int(r['suggest_notional']):,} 元）"
+                         for _, r in buys.iterrows()]
+            fields.append(("買進（開盤市價；漲幅≥9.5% 放棄）", "\n".join(buy_lines)[:1000], False))
     else:
-        lines.append("今日無換股動作，僅監控。")
-    lines.append("_規則：盤中警示僅供參考，月調倉紀律不因盤中波動改變。系統不下單。_")
-    send("\n".join(lines))
+        fields.append(("今日待辦", "無換股動作，僅監控", True))
+    send_embed(f"🌅 盤前摘要 {_now():%Y-%m-%d}", fields=fields, color=C_YELLOW if rebalance is not None else C_BLUE,
+               footer="盤中警示僅供參考，月調倉紀律不因盤中波動改變。系統不下單。")
 
     watch = sorted(set(holdings) | (set(rebalance["symbol"]) if rebalance is not None else set()))
     alerted: set[str] = set()
@@ -141,24 +141,24 @@ def main() -> None:
         if not quotes and not taiex:
             no_data_polls += 1
             if no_data_polls == 5 and _now().strftime("%H:%M") > "09:20":
-                send(":zzz: 09:20 仍無任何報價——今日可能休市或資料源異常，監控結束。")
+                send_embed("💤 監控結束", "09:20 仍無任何報價——今日可能休市或資料源異常。", color=C_GRAY)
                 return
         else:
             no_data_polls = 0
 
         # 開盤回報（換股日，09:05 後第一次有報價）
         if rebalance is not None and not open_reported and quotes and _now().strftime("%H:%M") >= "09:05":
-            rep = [":bell: **開盤回報（換股執行）**"]
+            rep = []
             for _, r in rebalance[rebalance["action"] == "BUY"].iterrows():
                 s = r["symbol"]
                 q, pc = quotes.get(s), prev_close.get(s)
                 if q is None or pc is None:
-                    rep.append(f"  {label(s)}：無報價")
+                    rep.append(f"{label(s)}：無報價")
                     continue
                 gap = q / pc - 1.0
-                flag = " → :no_entry: 漲幅≥9.5%，**放棄此買單**" if gap >= 0.095 else ""
-                rep.append(f"  {label(s)}：現價 {q:.2f}（{gap * 100:+.1f}%）{flag}")
-            send("\n".join(rep))
+                flag = " → ⛔ 漲幅≥9.5%，**放棄此買單**" if gap >= 0.095 else ""
+                rep.append(f"{label(s)}：現價 {q:.2f}（{gap * 100:+.1f}%）{flag}")
+            send_embed("🔔 開盤回報（換股執行）", "\n".join(rep)[:3900], color=C_YELLOW)
             open_reported = True
 
         # 持股警示
@@ -170,10 +170,12 @@ def main() -> None:
             chg = q / pc - 1.0
             day_pnl += n * (q - pc)
             if chg <= ALERT_POS_DROP and s not in alerted:
-                send(f":warning: **{label(s)}** 現價 {q:.2f}，當日 {chg * 100:+.1f}%（持有 {n} 股，估 {n * (q - pc):+,.0f} 元）\n_資訊警示；依紀律月調倉才動作。_")
+                send_embed(f"⚠️ {label(s)} 觸發警示",
+                           f"現價 {q:.2f}，當日 **{chg * 100:+.1f}%**（持有 {n} 股，估 {n * (q - pc):+,.0f} 元）",
+                           color=C_RED, footer="資訊警示；依紀律月調倉才動作")
                 alerted.add(s)
         if taiex is not None and "TAIEX" not in alerted and taiex <= ALERT_TAIEX_DROP:
-            send(f":chart_with_downwards_trend: 大盤當日 {taiex * 100:+.1f}%，注意風險（資訊警示）")
+            send_embed("📉 大盤警示", f"當日 **{taiex * 100:+.1f}%**，注意風險（資訊警示）", color=C_RED)
             alerted.add("TAIEX")
 
         # 心跳
@@ -181,24 +183,25 @@ def main() -> None:
         due = {t for t in heartbeats_due if t <= hhmm}
         if due:
             heartbeats_due -= due
-            send(f":hourglass: {hhmm} 監控正常｜持股 {len(holdings)} 檔｜估當日損益 {day_pnl:+,.0f} 元")
+            send_embed(f"⏳ {hhmm} 監控正常",
+                       f"持股 {len(holdings)} 檔｜估當日損益 **{day_pnl:+,.0f}** 元", color=C_GRAY)
 
         time.sleep(POLL_SEC)
 
     # ---- 收盤摘要 ----
     quotes = get_quotes(watch, sfx)
-    lines = [f":checkered_flag: **收盤摘要 {_now():%Y-%m-%d}**"]
+    lines = []
     total = 0.0
     for s, n in holdings.items():
         q, pc = quotes.get(s), prev_close.get(s)
         if q is None or pc is None:
-            lines.append(f"  {label(s)}：無報價")
+            lines.append(f"{label(s)}：無報價")
             continue
         total += n * (q - pc)
-        lines.append(f"  {label(s)}：{q:.2f}（{(q / pc - 1) * 100:+.1f}%）  {n * (q - pc):+,.0f} 元")
-    lines.append(f"估當日組合損益：{total:+,.0f} 元")
-    lines.append("_盤後 17:40 將自動更新資料並發送掃描報告。_")
-    send("\n".join(lines))
+        lines.append(f"{label(s)}：{q:.2f}（{(q / pc - 1) * 100:+.1f}%）  {n * (q - pc):+,.0f} 元")
+    desc = ("\n".join(lines)[:3800] + f"\n\n估當日組合損益：**{total:+,.0f}** 元") if lines else "空手，無持股損益。"
+    send_embed(f"🏁 收盤摘要 {_now():%Y-%m-%d}", desc, color=C_BLUE,
+               footer="盤後 17:40 將自動更新資料並發送掃描報告")
 
 
 def get_quotes_taiex() -> float | None:

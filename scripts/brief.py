@@ -28,7 +28,8 @@ from qts.market import assess_market, sector_strength
 from qts.scanner import STRAT_ZH
 
 
-def generate_brief() -> str:
+def generate_sections() -> tuple[pd.Timestamp, str, list[tuple[str, str]]]:
+    """回傳 (基準日, 燈號, [(問題標題, 答案), ...×8])。"""
     equity = 1_000_000.0
     sp = ROOT / "settings.json"
     if sp.exists():
@@ -79,58 +80,68 @@ def generate_brief() -> str:
     light_icon = {"綠": "🟢", "黃": "🟡", "紅": "🔴"}[ms.light]
     sec_top = sectors.head(5)
     sec_lines = [
-        f"  {r.sector}（{r.n}檔）：20日 {r.ret20 * 100:+.1f}%｜60日 {r.ret60 * 100:+.1f}%｜"
-        f"{r.breadth60 * 100:.0f}%站上60日線｜領頭：{'、'.join(f'{s} {names.get(s, '')}' for s in r.leaders)}"
+        f"{r.sector}（{r.n}檔）：20日 {r.ret20 * 100:+.1f}%｜{r.breadth60 * 100:.0f}%站上60日線｜"
+        f"領頭：{'、'.join(f'{s} {names.get(s, '')}' for s in r.leaders)}"
         for r in sec_top.itertuples()
     ]
     top5_line = "、".join(f"{s} {names.get(s, '')}" for s in top20.head(5).index)
 
-    L = []
-    L.append(f"══ 每日決策簡報 {ms.asof:%Y-%m-%d} ══")
-    L.append("")
-    L.append(f"【1︱市場適合做多嗎】{light_icon} {ms.light}燈")
-    L += [f"  {d}" for d in ms.detail]
-    L.append("")
-    L.append(f"【2︱應投入幾成資金】建議曝險上限 {ms.exposure_pct}%（燈號治理規則：綠100／黃60／紅20）")
-    L.append(f"  動能組合本身：{n_pos} 檔動能>0（足額 20 檔{'可滿倉' if n_pos >= 20 else f'→自然縮至 {min(n_pos, 20)} 檔'}）")
-    L.append("  註：MA200 自動減碼經檢定不採用（傷 Sharpe），總量控制由你依燈號執行")
-    L.append("")
-    L.append("【3︱哪些類股轉強】20 日等權報酬前五：")
-    L += sec_lines
-    L.append("")
-    L.append(f"【4︱哪些股票符合條件】動能前 20（前五：{top5_line}…）")
-    L.append(f"  波段：{scan_line}")
-    L.append("  完整名單與買賣價位：見儀表板 output/dashboard.html 或 Discord 掃描訊息")
-    L.append("")
-    L.append(f"【5︱這筆最多虧多少】波段：單筆風險 = 權益×1% = {equity * 0.01:,.0f} 元（停損價寫在候選表）")
-    L.append(f"  動能：單檔投入 {equity / 20:,.0f} 元、無個股停損，回測最大單筆約 −24%（靠 20 檔分散）")
-    L.append(f"  組合層：單日新增風險上限 4% = {equity * 0.04:,.0f} 元")
-    L.append("")
-    L.append("【6︱連續虧損降部位嗎】會，按回撤自動分級（STRATEGY.md §7.4）：")
-    L.append("  回撤>8% 波段風險減半→>12% 波段停新倉→>20% 動能曝險減半→>30% 全停人工檢討")
-    L.append("  目前狀態：尚未開始實盤，回撤 0%，正常層級")
-    L.append("")
-    L.append(f"【7︱大盤轉弱停止進場嗎】會，自動執行：大盤<60日線 → 波段 A/C 停開新倉（B 風險減半）")
-    L.append(f"  目前：大盤{'高於' if ms.taiex_close > ms.ma60 else '低於'} 60 日線 → 波段新倉{'開放' if ms.taiex_close > ms.ma60 else '停止'}中")
-    L.append("")
-    L.append(f"【8︱策略失效了嗎】{health_line}")
-    L.append("  判定框架：實盤後每季重跑回測比對；勝率/滑價偏離 2σ 或 PF 連兩季 <1 → 停機檢討")
-    L.append("  目前：實績樣本累積中（需 ≥100 筆才有統計力），所有訊號已自動存檔供日後檢驗")
+    sections: list[tuple[str, str]] = [
+        (f"1︱市場適合做多嗎　{light_icon} {ms.light}燈", "\n".join(ms.detail)),
+        (f"2︱應投入幾成資金　→ 上限 {ms.exposure_pct}%",
+         f"燈號治理規則：綠100／黃60／紅20\n動能組合：{n_pos} 檔動能>0"
+         f"（{'足額可滿倉' if n_pos >= 20 else f'自然縮至 {min(n_pos, 20)} 檔'}）\n"
+         "註：MA200 自動減碼經檢定不採用（傷 Sharpe），總量由你依燈號控制"),
+        ("3︱哪些類股轉強（20日等權前五）", "\n".join(sec_lines)),
+        ("4︱哪些股票符合條件",
+         f"動能前 20：{top5_line}…\n波段：{scan_line}\n完整名單與價位見掃描表格圖與儀表板"),
+        ("5︱這筆最多虧多少",
+         f"波段：單筆風險 = 權益×1% = {equity * 0.01:,.0f} 元（停損價逐檔列出）\n"
+         f"動能：單檔投入 {equity / 20:,.0f} 元、無個股停損（回測最大單筆約 −24%，靠 20 檔分散）\n"
+         f"組合層：單日新增風險上限 4% = {equity * 0.04:,.0f} 元"),
+        ("6︱連續虧損降部位嗎　→ 會（自動分級）",
+         "回撤>8% 波段風險減半 → >12% 波段停新倉 → >20% 動能曝險減半 → >30% 全停人工檢討\n"
+         "目前狀態：尚未實盤，回撤 0%，正常層級"),
+        ("7︱大盤轉弱停止進場嗎　→ 會（自動執行）",
+         f"大盤<60日線 → 波段 A/C 停開新倉、B 風險減半\n"
+         f"目前：大盤{'高於' if ms.taiex_close > ms.ma60 else '低於'} 60 日線 → "
+         f"波段新倉{'開放' if ms.taiex_close > ms.ma60 else '停止'}中"),
+        ("8︱策略失效了嗎",
+         f"{health_line}\n判定框架：實盤後每季重跑比對；勝率/滑價偏離 2σ 或 PF 連兩季<1 → 停機\n"
+         "目前：實績累積中（需 ≥100 筆），所有訊號已自動存檔"),
+    ]
+    return ms.asof, ms.light, sections
+
+
+def generate_brief() -> str:
+    asof, light, sections = generate_sections()
+    L = [f"══ 每日決策簡報 {asof:%Y-%m-%d} ══"]
+    for title, body in sections:
+        L.append("")
+        L.append(f"【{title}】")
+        L += [f"  {ln}" for ln in body.splitlines()]
     return "\n".join(L)
 
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--discord", action="store_true", help="同時發送到 Discord")
+    p.add_argument("--discord", action="store_true", help="同時發送到 Discord（embed 卡片）")
     args = p.parse_args()
+    asof, light, sections = generate_sections()
     text = generate_brief()
     print(text)
     out = ROOT / "output" / "brief.txt"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text, encoding="utf-8")   # 供儀表板嵌入
     if args.discord:
-        from qts.notify import send
-        send(text)
+        from qts.notify import C_GREEN, C_RED, C_YELLOW, send_embed
+        color = {"綠": C_GREEN, "黃": C_YELLOW, "紅": C_RED}[light]
+        send_embed(
+            title=f"📋 每日決策簡報 {asof:%Y-%m-%d}",
+            fields=[(t, b, False) for t, b in sections],
+            color=color,
+            footer="卡片顏色 = 市場燈號｜規則出處：STRATEGY.md / MOMENTUM.md",
+        )
 
 
 if __name__ == "__main__":
