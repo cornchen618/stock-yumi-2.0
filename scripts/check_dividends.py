@@ -128,7 +128,7 @@ def main() -> None:
         tx.to_csv(tx_path, index=False, encoding="utf-8-sig")
         holdings.to_csv(hp, index=False, encoding="utf-8-sig")
     up_path = ROOT / "data" / "dividends_upcoming.csv"
-    pd.DataFrame(upcoming_rows).to_csv(up_path, index=False)
+    pd.DataFrame(upcoming_rows, columns=["symbol", "ex_date", "kind", "per_share"]).to_csv(up_path, index=False)
 
     # Discord
     if notices:

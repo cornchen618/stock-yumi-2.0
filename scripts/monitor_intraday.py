@@ -26,14 +26,54 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from qts.data import load_names
+from qts.market import sector_strength
 from qts.notify import C_BLUE, C_GRAY, C_RED, C_YELLOW, send_embed
 
 NAMES = load_names(ROOT / "data" / "universe.csv")
 
 
+def _load_industry() -> dict[str, str]:
+    uni = pd.read_csv(ROOT / "data" / "universe.csv", dtype=str)
+    if "industry" in uni.columns:
+        return dict(zip(uni["code"], uni["industry"].fillna("未分類")))
+    return {}
+
+
+INDUSTRY = _load_industry()
+
+
 def label(sym: str) -> str:
     n = NAMES.get(sym, "")
     return f"{sym} {n}" if n else sym
+
+
+def strong_sectors_field(top_n: int = 5) -> tuple[str, str] | None:
+    """近期強勢族群（依最新收盤資料；盤前 08:55 當日尚未開盤，故為前一交易日基準）。
+
+    回傳 (欄位標題, 內容) 或 None（資料不足時略過，不阻斷盤前摘要）。
+    """
+    try:
+        px = pd.read_parquet(ROOT / "data" / "ohlcv.parquet", columns=["date", "symbol", "close"])
+        px["date"] = pd.to_datetime(px["date"])
+        recent = sorted(px["date"].unique())[-130:]           # 只取近 130 交易日，加速 pivot
+        px = px[px["date"].isin(recent)]
+        panel = px.pivot_table(index="date", columns="symbol", values="close")
+        asof = panel.index.max()
+        sec = sector_strength(panel, INDUSTRY).head(top_n)
+        if not len(sec):
+            return None
+        held_sectors = {INDUSTRY.get(s) for s in
+                        (pd.read_csv(ROOT / "holdings.csv", dtype={"symbol": str})["symbol"]
+                         if (ROOT / "holdings.csv").exists() else [])}
+        lines = []
+        for r in sec.itertuples():
+            leaders = "、".join(label(s) for s in r.leaders[:3])
+            star = " ⭐持股所在" if r.sector in held_sectors else ""
+            lines.append(f"{r.sector}：20日 {r.ret20 * 100:+.1f}%｜{r.breadth60 * 100:.0f}%站上季線{star}\n　領頭：{leaders}")
+        return (f"近期強勢族群（依 {asof:%m/%d} 收盤，前 {top_n} 名）", "\n".join(lines)[:1024])
+    except Exception as e:  # noqa: BLE001 - 族群計算失敗不阻斷盤前摘要
+        print(f"strong_sectors error: {e}")
+        return None
 
 POLL_SEC = 300
 END_TIME = "13:35"
@@ -128,9 +168,14 @@ def main() -> None:
     # ---- 盤前摘要 ----
     fields = []
     if holdings:
-        fields.append(("持股", "、".join(f"{label(s)}({n}股)" for s, n in holdings.items())[:1000], False))
+        hold_lines = [f"{label(s)}｜{INDUSTRY.get(s, '未分類')}｜{n} 股" for s, n in holdings.items()]
+        fields.append((f"持股（{len(holdings)} 檔）", "\n".join(hold_lines)[:1024], False))
     else:
         fields.append(("持股", "空手（holdings.csv 無持股）", True))
+    # 當天強勢族群（依最新收盤；⭐標記你的持股所在族群）
+    sec_field = strong_sectors_field()
+    if sec_field is not None:
+        fields.append((sec_field[0], sec_field[1], False))
     if rebalance is not None:
         buys = rebalance[rebalance["action"] == "BUY"]
         sells = rebalance[rebalance["action"] == "SELL"]
@@ -144,7 +189,7 @@ def main() -> None:
     else:
         fields.append(("今日待辦", "無換股動作，僅監控", True))
     send_embed(f"🌅 盤前摘要 {_now():%Y-%m-%d}", fields=fields, color=C_YELLOW if rebalance is not None else C_BLUE,
-               footer="盤中警示僅供參考，月調倉紀律不因盤中波動改變。系統不下單。")
+               footer="強勢族群為最新收盤基準（盤前尚未開盤）；警示僅供參考，系統不下單。")
 
     watch = sorted(set(holdings) | (set(rebalance["symbol"]) if rebalance is not None else set()))
     alerted: set[str] = set()
