@@ -153,6 +153,29 @@ def main() -> None:
     no_data_polls = 0
 
     while _now().strftime("%H:%M") < END_TIME:
+        # 持股熱重載：盤中經 record_trade.py 入帳後，下一輪輪詢即納入監控
+        try:
+            hp = ROOT / "holdings.csv"
+            new_h: dict[str, int] = {}
+            if hp.exists():
+                hdf = pd.read_csv(hp, dtype={"symbol": str})
+                new_h = dict(zip(hdf["symbol"], hdf["shares"].astype(int)))
+            if new_h != holdings:
+                added = set(new_h) - set(prev_close)
+                if added:
+                    pxx = pd.read_parquet(ROOT / "data" / "ohlcv.parquet",
+                                          columns=["symbol", "date", "raw_close"])
+                    pxx = pxx[pxx["symbol"].isin(added)]
+                    lastx = pxx.sort_values("date").groupby("symbol").tail(1)
+                    prev_close.update(dict(zip(lastx["symbol"], lastx["raw_close"])))
+                holdings = new_h
+                watch = sorted(set(holdings) | (set(rebalance["symbol"]) if rebalance is not None else set()))
+                send_embed("🔄 持股名單已同步",
+                           "監控中：" + ("、".join(f"{label(s)}({n}股)" for s, n in holdings.items()) or "空手"),
+                           color=C_BLUE)
+        except Exception as e:  # noqa: BLE001 - 熱重載失敗不影響既有監控
+            print(f"holdings reload error: {e}")
+
         quotes = get_quotes(watch, sfx)
         taiex = get_quotes_taiex()
 

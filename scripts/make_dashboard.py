@@ -258,6 +258,7 @@ def live_payload() -> dict | None:
 
 HTML = """<!DOCTYPE html>
 <html lang="zh-Hant"><head><meta charset="utf-8">
+<meta http-equiv="refresh" content="900">
 <title>TWQuant 交易金流儀表板</title>
 <script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
 <style>
@@ -286,7 +287,7 @@ HTML = """<!DOCTYPE html>
  details summary{cursor:pointer;list-style:none}
  details summary h2{display:inline}
 </style></head><body>
-<h1>TWQuant 交易金流儀表板 <span class="note">產生時間 __GEN_TIME__</span></h1>
+<h1>TWQuant 交易金流儀表板 <span class="note">產生時間 __GEN_TIME__｜價格資料日 __PX_DATE__｜本頁每 15 分鐘自動重新整理</span></h1>
 <div class="wrap">
 __BRIEF_SECTION__
 __LIVE_SECTION__
@@ -433,8 +434,13 @@ def main() -> None:
     else:
         brief_html = ""
 
+    px_date = pd.to_datetime(
+        pd.read_parquet(ROOT / "data" / "ohlcv.parquet", columns=["date"])["date"]
+    ).max().date()
+
     html = HTML
     html = html.replace("__BRIEF_SECTION__", brief_html)
+    html = html.replace("__PX_DATE__", str(px_date))
     html = html.replace("__GEN_TIME__", f"{datetime.now():%Y-%m-%d %H:%M}")
     html = html.replace("__S1_RULES__", strat1_rules())
     html = html.replace("__S2_RULES__", strat2_rules())

@@ -112,7 +112,7 @@ def scan_table_png(candidates: pd.DataFrame, asof_label: str, strat_zh: dict, tr
         headers, rows,
         col_colors={3: GREEN, 4: RED, 6: GREEN},
         group_rows=group_idx,
-        footer="停損=跌破次日開盤出場｜停利=+2R先出一半、停損上移成本後吊燈追蹤｜最大虧損=(收盤−停損)×建議股數，即停損打到時的實際金額（≈權益1%）",
+        footer="停損=跌破次日開盤出場｜停利=+2R先出一半、停損上移成本後吊燈追蹤｜最大虧損=(收盤−停損)×建議股數，即停損打到時的實際金額（約權益1%）",
     )
 
 
