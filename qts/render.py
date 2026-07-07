@@ -38,7 +38,7 @@ def table_png(
     group_rows = group_rows or set()
     n_cols = len(headers)
 
-    fig_w = max(7.0, min(14.0, 1.35 * n_cols + 2.5))
+    fig_w = max(7.0, min(16.0, 1.35 * n_cols + 2.5))
     fig_h = 0.85 + 0.34 * (len(rows) + 1) + (0.35 if footer else 0.1)
     fig, ax = plt.subplots(figsize=(fig_w, fig_h), dpi=150)
     fig.patch.set_facecolor(BG)
@@ -81,9 +81,21 @@ def table_png(
     return buf.getvalue()
 
 
-def scan_table_png(candidates: pd.DataFrame, asof_label: str, strat_zh: dict, trigger_zh: dict) -> bytes:
-    """波段候選（按策略分組）表格圖。"""
-    headers = ["標的", "觸發", "收盤", "停損", "停利+2R", "建議", "最大虧損"]
+def scan_table_png(
+    candidates: pd.DataFrame,
+    asof_label: str,
+    strat_zh: dict,
+    trigger_zh: dict,
+    industry_map: dict[str, str] | None = None,
+    theme_map: dict[str, str] | None = None,
+) -> bytes:
+    """波段候選（按策略分組）表格圖。industry/theme 未傳入時自動載入。"""
+    if industry_map is None or theme_map is None:
+        from .data import load_industry, load_themes
+        industry_map = industry_map if industry_map is not None else load_industry()
+        theme_map = theme_map if theme_map is not None else load_themes()
+
+    headers = ["標的", "產業", "題材", "觸發", "收盤", "停損", "停利+2R", "建議", "最大虧損"]
     rows: list[list] = []
     group_idx: set[int] = set()
     d = candidates.copy()
@@ -94,14 +106,17 @@ def scan_table_png(candidates: pd.DataFrame, asof_label: str, strat_zh: dict, tr
         if not len(g):
             continue
         group_idx.add(len(rows))
-        rows.append([f"{strat_zh.get(strat, strat)}（{len(g)} 檔）", "", "", "", "", "", ""])
+        rows.append([f"{strat_zh.get(strat, strat)}（{len(g)} 檔）"] + [""] * (len(headers) - 1))
         for r in g.itertuples():
             shares = int(r.suggest_shares)
             lots = shares // 1000
             tgt = getattr(r, "target_partial", round(r.close + 2 * (r.close - r.init_stop), 2))
             loss = getattr(r, "max_loss", round((r.close - r.init_stop) * shares))
+            sym = str(r.symbol)
             rows.append([
-                f"{r.symbol} {getattr(r, 'name', '')}",
+                f"{sym} {getattr(r, 'name', '')}",
+                industry_map.get(sym, "—") or "—",
+                theme_map.get(sym, "—") or "—",
                 trigger_zh.get(str(r.trigger), str(r.trigger)),
                 f"{r.close:g}", f"{r.init_stop:g}", f"{tgt:g}",
                 f"{lots}張" if lots else "資金不足",
@@ -110,15 +125,22 @@ def scan_table_png(candidates: pd.DataFrame, asof_label: str, strat_zh: dict, tr
     return table_png(
         f"波段掃描候選　{asof_label}　※紙上觀察，未過上線門檻",
         headers, rows,
-        col_colors={3: GREEN, 4: RED, 6: GREEN},
+        col_colors={5: GREEN, 6: RED, 8: GREEN},
         group_rows=group_idx,
-        footer="停損=跌破次日開盤出場｜停利=+2R先出一半、停損上移成本後吊燈追蹤｜最大虧損=(收盤-停損)x建議股數，即停損打到時的實際金額（約權益1%）",
+        footer="停損=跌破次日開盤出場｜停利=+2R先出一半、停損上移成本後吊燈追蹤｜最大虧損=(收盤-停損)x建議股數（約權益1%）｜題材為人工整理僅供參考",
     )
 
 
 def rebalance_table_png(reb: pd.DataFrame, asof_label: str, equity: float, top_n: int = 20) -> bytes:
-    """動能換股清單表格圖。"""
-    headers = ["動作", "標的", "排名", "動能", "參考價", "股數"]
+    """動能換股清單表格圖（產業/題材合併一欄：有題材顯示題材，否則產業）。"""
+    from .data import load_industry, load_themes
+    industry_map = load_industry()
+    theme_map = load_themes()
+
+    def tag(sym: str) -> str:
+        return theme_map.get(sym) or industry_map.get(sym, "—") or "—"
+
+    headers = ["動作", "標的", "題材/產業", "排名", "動能", "參考價", "股數"]
     rows: list[list] = []
     group_idx: set[int] = set()
     close_col = [c for c in reb.columns if str(c).startswith("close_")]
@@ -128,13 +150,14 @@ def rebalance_table_png(reb: pd.DataFrame, asof_label: str, equity: float, top_n
         if not len(g):
             continue
         group_idx.add(len(rows))
-        rows.append([f"{zh[action]}（{len(g)} 檔）", "", "", "", "", ""])
+        rows.append([f"{zh[action]}（{len(g)} 檔）"] + [""] * (len(headers) - 1))
         for _, r in g.iterrows():
             is_buy = action == "BUY"
             mom = r.get("momentum%")
             rows.append([
                 zh[action],
                 f"{r['symbol']} {r.get('name', '') or ''}",
+                tag(str(r["symbol"])),
                 f"#{int(r['rank'])}" if is_buy and pd.notna(r.get("rank")) else "",
                 f"{float(mom):+.0f}%" if is_buy and pd.notna(mom) else "",
                 f"{float(r[close_col[0]]):g}" if (is_buy and close_col and pd.notna(r.get(close_col[0]))) else "",

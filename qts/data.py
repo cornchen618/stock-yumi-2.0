@@ -90,6 +90,39 @@ def load_names(universe_csv: str | Path = "data/universe.csv") -> dict[str, str]
     return dict(zip(u["code"], u["name"].fillna("")))
 
 
+def load_industry(universe_csv: str | Path = "data/universe.csv") -> dict[str, str]:
+    """代號 → 產業別（交易所分類，去掉冗長字尾以利表格顯示）。"""
+    p = Path(universe_csv)
+    if not p.exists():
+        return {}
+    u = pd.read_csv(p, dtype=str)
+    if "industry" not in u.columns:
+        return {}
+
+    def short(x: str) -> str:
+        x = (x or "").strip()
+        for suf in ("工業", "事業"):
+            if x.endswith(suf) and len(x) > len(suf) + 1:
+                return x[: -len(suf)]
+        if x.endswith("業") and len(x) > 3:
+            return x[:-1]
+        return x
+
+    return {c: short(i) for c, i in zip(u["code"], u["industry"].fillna(""))}
+
+
+def load_themes(themes_csv: str | Path = "themes.csv") -> dict[str, str]:
+    """代號 → 題材標籤（人工維護的 themes.csv，專案根目錄、入版控）。
+
+    注意：題材是市場敘事、會過時；缺漏顯示為空白而非猜測。使用者可自行增修。
+    """
+    p = Path(themes_csv)
+    if not p.exists():
+        return {}
+    t = pd.read_csv(p, dtype=str)
+    return dict(zip(t["symbol"], t["theme"].fillna("")))
+
+
 def load_benchmark(path: str | Path) -> pd.DataFrame:
     """載入大盤指數日線，回傳 DataFrame(index=date, columns 含 close)。"""
     path = Path(path)

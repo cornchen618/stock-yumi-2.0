@@ -22,8 +22,16 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from qts.data import load_names
+from qts.data import load_industry, load_names, load_themes
 from qts.scanner import STRAT_ZH, TRIGGER_ZH
+
+INDUSTRY = load_industry(ROOT / "data" / "universe.csv")
+THEMES = load_themes(ROOT / "themes.csv")
+
+
+def _tag(sym: str) -> str:
+    """題材優先，否則產業。"""
+    return THEMES.get(sym) or INDUSTRY.get(sym, "—") or "—"
 
 COMM = 0.001425 * 0.6
 TAX = 0.003
@@ -88,11 +96,12 @@ def momentum_snapshot(equity: float, names: dict) -> str:
         shares = int(equity / 20 // price)
         status = "持有中" if s in held else "候選"
         rows.append(f"<tr><td>{i}</td><td>{s} {names.get(s, '')}</td>"
+                    f"<td>{_tag(s)}</td>"
                     f"<td class='pos'>{m * 100:+.0f}%</td><td>{price:g}</td>"
                     f"<td>{shares:,}</td><td>{status}</td></tr>")
     return f"""
 <h3>目前排名前 20──下月調倉候選預覽 <span class="note">（資料日 {asof:%Y-%m-%d}；每天變動，實際買賣以月底收盤排名為準）</span></h3>
-<table><tr><th>#</th><th>標的</th><th>12-1動能</th><th>收盤</th><th>建議股數</th><th>狀態</th></tr>
+<table><tr><th>#</th><th>標的</th><th>題材/產業</th><th>12-1動能</th><th>收盤</th><th>建議股數</th><th>狀態</th></tr>
 {''.join(rows)}</table>
 <p class="note">每檔目標金額＝權益÷20＝{equity / 20:,.0f} 元｜「持有中」= holdings.csv 內的實際持股</p>"""
 
@@ -117,7 +126,7 @@ def scan_snapshot() -> str:
         g = d[d["strategy"] == strat]
         if not len(g):
             continue
-        rows.append(f"<tr><td colspan='7' class='grp'>{STRAT_ZH.get(strat, strat)}（{len(g)} 檔，組內按量能強度排序）</td></tr>")
+        rows.append(f"<tr><td colspan='9' class='grp'>{STRAT_ZH.get(strat, strat)}（{len(g)} 檔，組內按量能強度排序）</td></tr>")
         for r in g.itertuples():
             trig = TRIGGER_ZH.get(str(r.trigger), str(r.trigger))
             shares = int(r.suggest_shares)
@@ -125,12 +134,14 @@ def scan_snapshot() -> str:
             size = f"{lots}張" if lots else "資金不足"
             loss = getattr(r, "max_loss", round((r.close - r.init_stop) * shares))
             loss_txt = f"−{loss:,.0f}" if shares else "—"
-            rows.append(f"<tr><td>{r.symbol} {getattr(r, 'name', '')}</td>"
+            sym = str(r.symbol)
+            rows.append(f"<tr><td>{sym} {getattr(r, 'name', '')}</td>"
+                        f"<td>{INDUSTRY.get(sym, '—')}</td><td>{THEMES.get(sym, '—') or '—'}</td>"
                         f"<td>{trig}</td><td>{r.close:g}</td><td class='neg'>{r.init_stop:g}</td>"
                         f"<td class='pos'>{r.target_partial:g}</td><td>{size}</td><td class='neg'>{loss_txt}</td></tr>")
     return f"""
-<h3>最新候選 <span class="note">（資料日 {day[:4]}-{day[4:6]}-{day[6:]}）</span></h3>
-<table><tr><th>標的</th><th>觸發</th><th>收盤</th><th>停損</th><th>停利(+2R)</th><th>建議</th><th>最大虧損</th></tr>
+<h3>最新候選 <span class="note">（資料日 {day[:4]}-{day[4:6]}-{day[6:]}；題材為人工整理僅供參考）</span></h3>
+<table><tr><th>標的</th><th>產業</th><th>題材</th><th>觸發</th><th>收盤</th><th>停損</th><th>停利(+2R)</th><th>建議</th><th>最大虧損</th></tr>
 {''.join(rows)}</table>
 <p class="note">停損＝跌破次日開盤出場｜停利＝到價先出一半、剩餘停損上移至成本後吊燈追蹤｜最大虧損＝(收盤−停損)×建議股數＝停損打到時實際賠的錢（≈權益1%）</p>"""
 
