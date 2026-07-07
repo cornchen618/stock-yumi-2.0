@@ -71,6 +71,12 @@ def send_png(png: bytes, filename: str = "table.png", content: str = "") -> bool
     return _post(payload, files={"file": (filename, png, "image/png")})
 
 
+def send_file(data: bytes, filename: str, content: str = "", mime: str = "application/octet-stream") -> bool:
+    """傳任意檔案附件（如完整儀表板 HTML）。Discord 免費層單檔上限 8MB。"""
+    payload = {"content": content[:MAX_LEN]} if content else {}
+    return _post(payload, files={"file": (filename, data, mime)})
+
+
 def send(text: str, retries: int = 3) -> bool:
     url = os.environ.get("DISCORD_WEBHOOK_URL") or os.environ.get("DISCORD_WEBHOOK")
     if not url:
