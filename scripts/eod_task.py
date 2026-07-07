@@ -141,20 +141,17 @@ def main() -> None:
     if code != 0:
         log(f"brief error: {out[-300:]}")
 
-    # 5. 重生金流儀表板（失敗不影響主流程），並附完整檔案到 Discord
+    # 5. 每日戰報 PNG（Discord 內直接顯示：大盤/持股/帳戶一張圖）
+    code, out = run(["scripts/daily_report.py"])
+    log(f"daily_report exit={code}")
+    if code != 0:
+        log(f"daily_report error: {out[-300:]}")
+
+    # 6. 重生金流儀表板（本機瀏覽用；完整互動版在 output/dashboard.html）
     code, out = run(["scripts/make_dashboard.py"])
     log(f"dashboard exit={code}")
     if code != 0:
         log(f"dashboard error: {out[-300:]}")
-    else:
-        dash = ROOT / "output" / "dashboard.html"
-        if dash.exists():
-            from qts.notify import send_file
-            send_file(dash.read_bytes(), f"dashboard_{today:%Y%m%d}.html",
-                      content="📊 **今日完整儀表板**（下載後用瀏覽器開啟；圖表需網路載入）"
-                              "\n含：八問簡報｜實盤帳戶｜策略規則與候選（產業/題材）｜金流圖表",
-                      mime="text/html")
-            log("dashboard file sent to discord")
     log("EOD task done")
 
 

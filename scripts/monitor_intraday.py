@@ -223,6 +223,8 @@ def main() -> None:
     # 即時報價推送時點：09:30 起每 30 分鐘一次，至 13:00
     snapshot_due = {t for h in range(9, 14) for m in (0, 30)
                     if "09:30" <= (t := f"{h:02d}:{m:02d}") <= "13:00"}
+    # 三策略盤中掃描：每小時一次（推估量跑正式訊號邏輯，preview_scan 子程序執行不阻塞監控）
+    scan_due = {"10:00", "11:00", "12:00", "13:05"}
     open_reported = False
     no_data_polls = 0
 
@@ -291,8 +293,21 @@ def main() -> None:
             send_embed("📉 大盤急跌", f"加權指數當日 **{taiex * 100:+.1f}%**（資訊警示）", color=C_RED)
             alerted.add("TAIEX")
 
-        # 持股即時報價（每 30 分鐘；兼作系統心跳，追蹤價格而非損益）
+        # 三策略盤中掃描（每小時；子程序執行約 3-5 分鐘後自行推表格圖）
         hhmm = _now().strftime("%H:%M")
+        scan_hit = {t for t in scan_due if t <= hhmm}
+        if scan_hit:
+            scan_due -= scan_hit
+            try:
+                import subprocess
+                with open(ROOT / "logs" / "preview.log", "a", encoding="utf-8") as lf:
+                    subprocess.Popen([sys.executable, str(ROOT / "scripts" / "preview_scan.py")],
+                                     cwd=ROOT, stdout=lf, stderr=subprocess.STDOUT)
+                print(f"hourly scan spawned at {hhmm}")
+            except Exception as e:  # noqa: BLE001 - 掃描啟動失敗不影響監控
+                print(f"hourly scan spawn error: {e}")
+
+        # 持股即時報價（每 30 分鐘；兼作系統心跳，追蹤價格而非損益）
         due = {t for t in snapshot_due if t <= hhmm}
         if due:
             snapshot_due -= due
