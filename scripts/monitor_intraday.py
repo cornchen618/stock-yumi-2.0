@@ -1,12 +1,11 @@
 """盤中監控（排程於交易日 08:55 啟動，13:35 自動結束）。
 
 輸出規則（訊號雜訊比優先，事件驅動而非灌水）：
-  08:55 盤前摘要   持股清單＋今日待辦（換股日附買賣清單與放棄規則）
+  08:55 盤前       先推波段候選表（PNG）＋盤前摘要（持股含產業、強勢族群、今日待辦）
   09:05 開盤回報   換股日：逐筆回報開盤價、標記「開盤漲幅≥9.5% → 放棄」的買單
-  盤中事件警示     持股單日 ≤ −8% 或觸及跌停（每檔每日一次）
-                   TAIEX 單日 ≤ −3%（每日一次）
-  10:30/11:30/12:30 心跳一行（持股數、估當日損益）— 沉默≠正常，心跳確認系統活著
-  13:35 收盤摘要   每檔持股當日漲跌、組合估值變化
+  09:30~13:00 即時報價  每 30 分鐘推持股現價與漲跌%（追蹤價格而非損益，兼作系統心跳）
+  急跌警示         持股單日 ≤ −8% 或大盤 ≤ −3%（價格導向，每檔每日一次）
+  13:35 收盤摘要   每檔當日漲跌%；當日組合變動僅列一行
 
 注意：報價來自 Yahoo，可能延遲 5~15 分鐘；警示僅供參考，月調倉紀律不因盤中波動改變。
 系統不下單。所有實際委託由使用者於券商執行。
@@ -27,9 +26,16 @@ sys.path.insert(0, str(ROOT))
 
 from qts.data import load_names
 from qts.market import sector_strength
-from qts.notify import C_BLUE, C_GRAY, C_RED, C_YELLOW, send_embed
+from qts.notify import C_BLUE, C_GRAY, C_GREEN, C_RED, C_YELLOW, send_embed, send_png
+from qts.render import scan_table_png
+from qts.scanner import STRAT_ZH, TRIGGER_ZH
 
 NAMES = load_names(ROOT / "data" / "universe.csv")
+
+
+def _dot(chg_pct: float) -> str:
+    """台股慣例：紅漲綠跌。"""
+    return "🔴" if chg_pct > 0 else ("🟢" if chg_pct < 0 else "⚪")
 
 
 def _load_industry() -> dict[str, str]:
@@ -74,6 +80,24 @@ def strong_sectors_field(top_n: int = 5) -> tuple[str, str] | None:
     except Exception as e:  # noqa: BLE001 - 族群計算失敗不阻斷盤前摘要
         print(f"strong_sectors error: {e}")
         return None
+
+
+def push_latest_scan() -> int:
+    """盤前推最新一份波段候選表（來自前一交易日 17:40 盤後掃描）。回傳候選檔數。"""
+    files = sorted((ROOT / "output").glob("scan_*.csv"))
+    if not files:
+        return 0
+    day = files[-1].stem.split("_")[-1]
+    d = pd.read_csv(files[-1], dtype={"symbol": str})
+    if not len(d):
+        return 0
+    try:
+        png = scan_table_png(d, f"{day[:4]}-{day[4:6]}-{day[6:]}", STRAT_ZH, TRIGGER_ZH)
+        send_png(png, filename="scan.png",
+                 content="📋 **今日波段候選**（前一交易日收盤掃出；紙上觀察，未過上線門檻）")
+    except Exception as e:  # noqa: BLE001 - 表格渲染失敗不阻斷盤前
+        print(f"push_latest_scan error: {e}")
+    return len(d)
 
 POLL_SEC = 300
 END_TIME = "13:35"
@@ -165,7 +189,10 @@ def main() -> None:
     sfx = _suffix_map()
     holdings, rebalance, prev_close = load_state()
 
-    # ---- 盤前摘要 ----
+    # ---- 盤前：先推波段候選表（你指定盤前先看的內容）----
+    push_latest_scan()
+
+    # ---- 盤前摘要（持股含產業＋強勢族群＋今日待辦）----
     fields = []
     if holdings:
         hold_lines = [f"{label(s)}｜{INDUSTRY.get(s, '未分類')}｜{n} 股" for s, n in holdings.items()]
@@ -193,7 +220,9 @@ def main() -> None:
 
     watch = sorted(set(holdings) | (set(rebalance["symbol"]) if rebalance is not None else set()))
     alerted: set[str] = set()
-    heartbeats_due = {"10:30", "11:30", "12:30"}
+    # 即時報價推送時點：09:30 起每 30 分鐘一次，至 13:00
+    snapshot_due = {t for h in range(9, 14) for m in (0, 30)
+                    if "09:30" <= (t := f"{h:02d}:{m:02d}") <= "13:00"}
     open_reported = False
     no_data_polls = 0
 
@@ -247,47 +276,59 @@ def main() -> None:
             send_embed("🔔 開盤回報（換股執行）", "\n".join(rep)[:3900], color=C_YELLOW)
             open_reported = True
 
-        # 持股警示
-        day_pnl = 0.0
-        for s, n in holdings.items():
+        # 急跌警示（價格導向，不報虧損金額；每檔每日一次）
+        for s in holdings:
             q, pc = quotes.get(s), prev_close.get(s)
             if q is None or pc is None:
                 continue
             chg = q / pc - 1.0
-            day_pnl += n * (q - pc)
             if chg <= ALERT_POS_DROP and s not in alerted:
-                send_embed(f"⚠️ {label(s)} 觸發警示",
-                           f"現價 {q:.2f}，當日 **{chg * 100:+.1f}%**（持有 {n} 股，估 {n * (q - pc):+,.0f} 元）",
-                           color=C_RED, footer="資訊警示；依紀律月調倉才動作")
+                send_embed(f"⚠️ {label(s)} 急跌 {chg * 100:+.1f}%",
+                           f"現價 {q:g}（當日跌破 −8%）", color=C_RED,
+                           footer="資訊警示；依紀律月調倉才動作")
                 alerted.add(s)
         if taiex is not None and "TAIEX" not in alerted and taiex <= ALERT_TAIEX_DROP:
-            send_embed("📉 大盤警示", f"當日 **{taiex * 100:+.1f}%**，注意風險（資訊警示）", color=C_RED)
+            send_embed("📉 大盤急跌", f"加權指數當日 **{taiex * 100:+.1f}%**（資訊警示）", color=C_RED)
             alerted.add("TAIEX")
 
-        # 心跳
+        # 持股即時報價（每 30 分鐘；兼作系統心跳，追蹤價格而非損益）
         hhmm = _now().strftime("%H:%M")
-        due = {t for t in heartbeats_due if t <= hhmm}
+        due = {t for t in snapshot_due if t <= hhmm}
         if due:
-            heartbeats_due -= due
-            send_embed(f"⏳ {hhmm} 監控正常",
-                       f"持股 {len(holdings)} 檔｜估當日損益 **{day_pnl:+,.0f}** 元", color=C_GRAY)
+            snapshot_due -= due
+            lines = []
+            for s in holdings:
+                q, pc = quotes.get(s), prev_close.get(s)
+                if q is None or pc is None:
+                    lines.append(f"　{label(s)}：無報價")
+                    continue
+                chg = (q / pc - 1.0) * 100
+                lines.append(f"{_dot(chg)} {label(s)}　現價 {q:g}　{chg:+.1f}%")
+            if taiex is not None:
+                lines.append(f"{_dot(taiex * 100)} 加權指數　{taiex * 100:+.1f}%")
+            body = "\n".join(lines) if lines else "空手，僅追蹤大盤。"
+            send_embed(f"📈 持股即時報價 {hhmm}", body, color=C_GRAY,
+                       footer="Yahoo 報價延遲約 15 分鐘｜紅漲綠跌")
 
         time.sleep(POLL_SEC)
 
-    # ---- 收盤摘要 ----
+    # ---- 收盤摘要（價格導向；當日組合變動只列一行，非逐檔報虧損）----
     quotes = get_quotes(watch, sfx)
     lines = []
     total = 0.0
     for s, n in holdings.items():
         q, pc = quotes.get(s), prev_close.get(s)
         if q is None or pc is None:
-            lines.append(f"{label(s)}：無報價")
+            lines.append(f"　{label(s)}：無報價")
             continue
+        chg = (q / pc - 1.0) * 100
         total += n * (q - pc)
-        lines.append(f"{label(s)}：{q:.2f}（{(q / pc - 1) * 100:+.1f}%）  {n * (q - pc):+,.0f} 元")
-    desc = ("\n".join(lines)[:3800] + f"\n\n估當日組合損益：**{total:+,.0f}** 元") if lines else "空手，無持股損益。"
+        lines.append(f"{_dot(chg)} {label(s)}　收 {q:g}　{chg:+.1f}%")
+    desc = "\n".join(lines)[:3800] if lines else "空手，無持股。"
+    if holdings:
+        desc += f"\n\n當日組合市值變動（收盤 vs 昨收）：**{total:+,.0f}** 元"
     send_embed(f"🏁 收盤摘要 {_now():%Y-%m-%d}", desc, color=C_BLUE,
-               footer="盤後 17:40 將自動更新資料並發送掃描報告")
+               footer="盤後 17:40 將自動更新資料並發送掃描報告與八問簡報")
 
 
 def get_quotes_taiex() -> float | None:

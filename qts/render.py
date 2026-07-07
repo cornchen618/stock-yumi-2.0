@@ -105,14 +105,14 @@ def scan_table_png(candidates: pd.DataFrame, asof_label: str, strat_zh: dict, tr
                 trigger_zh.get(str(r.trigger), str(r.trigger)),
                 f"{r.close:g}", f"{r.init_stop:g}", f"{tgt:g}",
                 f"{lots}張" if lots else "資金不足",
-                f"−{loss:,.0f}" if shares else "—",
+                f"-{loss:,.0f}" if shares else "—",   # ASCII 減號（U+2212 在 JhengHei 缺字會變方框）
             ])
     return table_png(
         f"波段掃描候選　{asof_label}　※紙上觀察，未過上線門檻",
         headers, rows,
         col_colors={3: GREEN, 4: RED, 6: GREEN},
         group_rows=group_idx,
-        footer="停損=跌破次日開盤出場｜停利=+2R先出一半、停損上移成本後吊燈追蹤｜最大虧損=(收盤−停損)×建議股數，即停損打到時的實際金額（約權益1%）",
+        footer="停損=跌破次日開盤出場｜停利=+2R先出一半、停損上移成本後吊燈追蹤｜最大虧損=(收盤-停損)x建議股數，即停損打到時的實際金額（約權益1%）",
     )
 
 
